@@ -3,11 +3,62 @@ import { db } from "@db";
 import { crawlerConfigs, recipes } from "@db/schema";
 import { eq } from "drizzle-orm";
 
+const DEFAULT_CONFIGS = [
+  {
+    siteName: "Lodge Cast Iron",
+    siteUrl: "https://www.lodgecastiron.com/recipes",
+    selectors: {
+      recipeLinks: ".recipe-card a",
+      title: "h1.recipe-title",
+      description: ".recipe-description",
+      ingredients: ".ingredients-list li",
+      instructions: ".instructions-list li",
+    },
+    enabled: true,
+  },
+  {
+    siteName: "Field Company",
+    siteUrl: "https://fieldcompany.com/pages/recipes",
+    selectors: {
+      recipeLinks: ".recipe-preview a",
+      title: ".recipe-title",
+      description: ".recipe-intro",
+      ingredients: ".ingredients-list li",
+      instructions: ".instructions-list li",
+    },
+    enabled: true,
+  },
+  // Add more sites as needed
+];
+
 const delay = (ms: number) => new Promise(resolve => setTimeout(resolve, ms));
+
+async function initializeCrawlerConfigs() {
+  for (const config of DEFAULT_CONFIGS) {
+    const [existing] = await db
+      .select()
+      .from(crawlerConfigs)
+      .where(eq(crawlerConfigs.siteName, config.siteName));
+
+    if (!existing) {
+      await db.insert(crawlerConfigs).values(config);
+    }
+  }
+}
 
 export async function crawlRecipe(url: string, selectors: any) {
   try {
-    const response = await fetch(url);
+    console.log(`Crawling recipe from ${url}`);
+    const response = await fetch(url, {
+      headers: {
+        'User-Agent': 'Mozilla/5.0 (compatible; CastIronRecipeCrawler/1.0; +https://mycookwarecare.com)'
+      }
+    });
+
+    if (!response.ok) {
+      throw new Error(`Failed to fetch URL: ${response.status} ${response.statusText}`);
+    }
+
     const html = await response.text();
     const dom = new JSDOM(html);
     const document = dom.window.document;
@@ -39,23 +90,45 @@ export async function crawlRecipe(url: string, selectors: any) {
 }
 
 export async function runCrawler() {
+  await initializeCrawlerConfigs();
   const configs = await db.select().from(crawlerConfigs).where(eq(crawlerConfigs.enabled, true));
 
   for (const config of configs) {
     try {
-      const response = await fetch(config.siteUrl);
+      console.log(`Starting crawl for ${config.siteName}`);
+      const response = await fetch(config.siteUrl, {
+        headers: {
+          'User-Agent': 'Mozilla/5.0 (compatible; CastIronRecipeCrawler/1.0; +https://mycookwarecare.com)'
+        }
+      });
+
+      if (!response.ok) {
+        throw new Error(`Failed to fetch site: ${response.status} ${response.statusText}`);
+      }
+
       const html = await response.text();
       const dom = new JSDOM(html);
       const document = dom.window.document;
 
       const recipeLinks = Array.from(document.querySelectorAll(config.selectors.recipeLinks))
-        .map((link: any) => link.href)
+        .map((link: any) => {
+          const href = link.href;
+          if (!href) return null;
+          try {
+            return new URL(href, config.siteUrl).toString();
+          } catch (e) {
+            console.error(`Invalid URL: ${href}`);
+            return null;
+          }
+        })
         .filter(Boolean);
+
+      console.log(`Found ${recipeLinks.length} recipe links on ${config.siteName}`);
 
       for (const link of recipeLinks) {
         await delay(2000); // Ethical crawling delay
         const recipeData = await crawlRecipe(link, config.selectors);
-        
+
         if (recipeData) {
           await db.insert(recipes).values({
             ...recipeData,
@@ -66,6 +139,7 @@ export async function runCrawler() {
             servings: 4,
             sourceName: config.siteName,
           });
+          console.log(`Successfully saved recipe: ${recipeData.title}`);
         }
       }
 
@@ -73,6 +147,8 @@ export async function runCrawler() {
         .update(crawlerConfigs)
         .set({ lastCrawl: new Date() })
         .where(eq(crawlerConfigs.id, config.id));
+
+      console.log(`Completed crawl for ${config.siteName}`);
     } catch (error) {
       console.error(`Failed to crawl ${config.siteName}:`, error);
     }
