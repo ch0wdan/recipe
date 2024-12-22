@@ -3,6 +3,7 @@ import { Navbar } from "@/components/Navbar";
 import { Home } from "@/pages/Home";
 import { RecipeDetails } from "@/pages/RecipeDetails";
 import { AdminDashboard } from "@/pages/AdminDashboard";
+import { CrawlerAnalyzer } from "@/pages/CrawlerAnalyzer";
 import { useUser } from "@/hooks/use-user";
 import { Loader2 } from "lucide-react";
 import AuthPage from "@/pages/AuthPage";
@@ -28,6 +29,12 @@ function App() {
           <Route path="/login" component={AuthPage} />
           <Route path="/admin">
             {user?.isAdmin ? <AdminDashboard /> : () => {
+              window.location.href = "/";
+              return null;
+            }}
+          </Route>
+          <Route path="/admin/crawler/analyze">
+            {user?.isAdmin ? <CrawlerAnalyzer /> : () => {
               window.location.href = "/";
               return null;
             }}

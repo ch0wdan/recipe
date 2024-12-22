@@ -6,6 +6,8 @@ import { eq, and, desc, sql } from "drizzle-orm";
 import { runCrawler, analyzeWebsite } from "./crawler";
 import { setupAuth } from "./auth";
 import { requirePermissions } from "./middleware/rbac";
+import { JSDOM } from "jsdom";
+import fetch from "node-fetch"; // Added node-fetch import
 import cron from "node-cron";
 import { log } from "./vite";
 
@@ -251,6 +253,84 @@ export function registerRoutes(app: Express): Server {
       res.status(500).json({ error: "Failed to analyze website" });
     }
   });
+
+  app.post("/api/admin/crawler/analyze-interactive", requirePermissions({ permissions: ["manage_crawler"] }), async (req, res) => {
+    try {
+      const { url } = req.body;
+      if (!url) {
+        return res.status(400).json({ error: "URL is required" });
+      }
+
+      // Fetch the webpage
+      const response = await fetch(url, {
+        headers: {
+          "User-Agent": "Mozilla/5.0 (compatible; RecipeCrawler/1.0; +https://example.com)",
+        },
+      });
+
+      if (!response.ok) {
+        throw new Error(`Failed to fetch webpage: ${response.statusText}`);
+      }
+
+      const html = await response.text();
+      const dom = new JSDOM(html);
+      const document = dom.window.document;
+
+      // Clean up the HTML by removing scripts and iframes for security
+      const scripts = document.getElementsByTagName('script');
+      const iframes = document.getElementsByTagName('iframe');
+      for (const element of [...scripts, ...iframes]) {
+        element.remove();
+      }
+
+      // Add unique identifiers to elements for selection
+      const allElements = document.querySelectorAll('*');
+      let elementIndex = 0;
+      allElements.forEach(element => {
+        element.setAttribute('data-recipe-element', `element-${elementIndex++}`);
+      });
+
+      // Return the processed HTML
+      res.json({
+        html: document.documentElement.outerHTML,
+        url: url
+      });
+    } catch (error) {
+      log(`Error analyzing webpage interactively: ${error}`, "express");
+      res.status(500).json({ error: "Failed to analyze webpage" });
+    }
+  });
+
+  app.post("/api/admin/crawler/config", requirePermissions({ permissions: ["manage_crawler"] }), async (req, res) => {
+    try {
+      const { url, selectors } = req.body;
+      if (!url || !selectors) {
+        return res.status(400).json({ error: "URL and selectors are required" });
+      }
+
+      // Extract domain for site name
+      const siteName = new URL(url).hostname
+        .replace(/^www\./, '')
+        .split('.')[0]
+        .split('-')
+        .map(word => word.charAt(0).toUpperCase() + word.slice(1))
+        .join(' ');
+
+      // Create new crawler configuration
+      const [config] = await db.insert(crawlerConfigs).values({
+        siteName,
+        siteUrl: url,
+        enabled: true,
+        selectors,
+      }).returning();
+
+      res.json(config);
+    } catch (error) {
+      log(`Error saving crawler configuration: ${error}`, "express");
+      res.status(500).json({ error: "Failed to save crawler configuration" });
+    }
+  });
+
 
   // Comments
   app.post("/api/recipes/:id/comments", async (req, res) => {
