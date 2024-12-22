@@ -43,6 +43,7 @@ export function CrawlerAnalyzer() {
         iframe.style.width = '100%';
         iframe.style.height = '100%';
         iframe.style.border = 'none';
+        iframe.sandbox.add('allow-same-origin'); // Allow same origin policy
 
         // Clear existing content and append iframe
         previewRef.current.innerHTML = '';
@@ -52,7 +53,37 @@ export function CrawlerAnalyzer() {
         const iframeDoc = iframe.contentWindow?.document;
         if (iframeDoc) {
           iframeDoc.open();
-          iframeDoc.write(data.html);
+          iframeDoc.write(`
+            <!DOCTYPE html>
+            <html>
+              <head>
+                <base href="${data.url}">
+                <style>
+                  /* Highlight selectable elements */
+                  *[data-recipe-element]:hover {
+                    outline: 2px solid #3b82f6 !important;
+                    cursor: pointer !important;
+                  }
+
+                  /* Style for selected elements */
+                  *[data-selected="true"] {
+                    outline: 2px solid #22c55e !important;
+                  }
+                </style>
+              </head>
+              <body>
+                ${data.html}
+                <script>
+                  // Prevent links from navigating
+                  document.addEventListener('click', (e) => {
+                    if (e.target.tagName === 'A') {
+                      e.preventDefault();
+                    }
+                  });
+                </script>
+              </body>
+            </html>
+          `);
           iframeDoc.close();
 
           // Add click event listener to the iframe document
@@ -60,25 +91,60 @@ export function CrawlerAnalyzer() {
             e.preventDefault();
             if (!activeSelector) return;
 
+            // Find the closest element with data-recipe-element
             const target = e.target as HTMLElement;
             if (!target) return;
 
+            let currentElement: HTMLElement | null = target;
+            while (currentElement && !currentElement.getAttribute('data-recipe-element')) {
+              currentElement = currentElement.parentElement;
+            }
+
+            if (!currentElement) return;
+
             // Get unique data attribute
-            const elementId = target.getAttribute('data-recipe-element');
+            const elementId = currentElement.getAttribute('data-recipe-element');
             if (!elementId) return;
+
+            // Remove previous selection for this type
+            const previousSelected = iframeDoc.querySelector(`[data-selected="true"][data-selector-type="${activeSelector}"]`);
+            if (previousSelected) {
+              previousSelected.removeAttribute('data-selected');
+              previousSelected.removeAttribute('data-selector-type');
+            }
+
+            // Mark as selected
+            currentElement.setAttribute('data-selected', 'true');
+            currentElement.setAttribute('data-selector-type', activeSelector);
 
             // Generate a selector for this element
             let selector = '';
-            if (target.id) {
-              selector = `#${target.id}`;
-            } else if (target.className) {
-              selector = `.${target.className.split(' ').join('.')}`;
-            } else {
-              selector = `[data-recipe-element="${elementId}"]`;
+            if (currentElement.id) {
+              selector = `#${currentElement.id}`;
+            } else if (currentElement.className) {
+              const classes = Array.from(currentElement.classList)
+                .filter(cls => !cls.includes('hover'))
+                .join('.');
+              selector = classes ? `.${classes}` : '';
             }
 
-            // Get the text content
-            const value = target.textContent?.trim() || '';
+            if (!selector) {
+              // Fallback to tag name and nth-child if no ID or class
+              let index = 1;
+              let prev = currentElement.previousElementSibling;
+              while (prev) {
+                if (prev.tagName === currentElement.tagName) {
+                  index++;
+                }
+                prev = prev.previousElementSibling;
+              }
+              selector = `${currentElement.tagName.toLowerCase()}:nth-child(${index})`;
+            }
+
+            // Get the text content or src for images
+            let value = currentElement.tagName.toLowerCase() === 'img' 
+              ? currentElement.getAttribute('src') || ''
+              : currentElement.textContent?.trim() || '';
 
             handleElementSelection(selector, value);
           });

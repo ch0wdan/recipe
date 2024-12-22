@@ -273,15 +273,32 @@ export function registerRoutes(app: Express): Server {
       }
 
       const html = await response.text();
-      const dom = new JSDOM(html);
+      const dom = new JSDOM(html, {
+        url: url, // Set the URL to resolve relative paths
+        resources: "usable", // Enable loading of external resources
+        runScripts: "dangerously", // Enable script execution
+      });
+
       const document = dom.window.document;
 
       // Clean up the HTML by removing scripts and iframes for security
-      const scripts = document.getElementsByTagName('script');
-      const iframes = document.getElementsByTagName('iframe');
-      for (const element of [...scripts, ...iframes]) {
-        element.remove();
-      }
+      document.querySelectorAll('script, iframe').forEach(el => el.remove());
+
+      // Convert relative URLs to absolute
+      const baseUrl = new URL(url);
+      document.querySelectorAll('[src], [href]').forEach(el => {
+        ['src', 'href'].forEach(attr => {
+          const value = el.getAttribute(attr);
+          if (value && !value.startsWith('http') && !value.startsWith('data:')) {
+            try {
+              const absoluteUrl = new URL(value, baseUrl).toString();
+              el.setAttribute(attr, absoluteUrl);
+            } catch (e) {
+              // Ignore invalid URLs
+            }
+          }
+        });
+      });
 
       // Add unique identifiers to elements for selection
       const allElements = document.querySelectorAll('*');
