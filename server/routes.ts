@@ -208,6 +208,25 @@ export function registerRoutes(app: Express): Server {
     }
   });
 
+  app.delete("/api/admin/crawler/:id", requirePermissions({ permissions: ["manage_crawler"] }), async (req, res) => {
+    try {
+      const configId = parseInt(req.params.id);
+      const [deleted] = await db
+        .delete(crawlerConfigs)
+        .where(eq(crawlerConfigs.id, configId))
+        .returning();
+
+      if (!deleted) {
+        return res.status(404).json({ error: "Crawler configuration not found" });
+      }
+
+      res.json({ message: "Crawler configuration deleted successfully" });
+    } catch (error) {
+      log(`Error deleting crawler config: ${error}`, "express");
+      res.status(500).json({ error: "Failed to delete crawler configuration" });
+    }
+  });
+
   app.post("/api/admin/crawler/run", requirePermissions({ permissions: ["manage_crawler"] }), async (req, res) => {
     try {
       await runCrawler();

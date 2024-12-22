@@ -205,6 +205,21 @@ export function AdminDashboard() {
     },
   });
 
+  const deleteCrawlerMutation = useMutation({
+    mutationFn: async (id: number) => {
+      const response = await fetch(`/api/admin/crawler/${id}`, {
+        method: "DELETE",
+        credentials: "include",
+      });
+      if (!response.ok) throw new Error(await response.text());
+      return response.json();
+    },
+    onSuccess: () => {
+      toast({ title: "Crawler configuration deleted successfully" });
+      refetchCrawler();
+    },
+  });
+
   const handleCrawlerSubmit = (data: NewCrawlerConfig) => {
     if (editingConfig) {
       updateCrawlerMutation.mutate({ ...data, id: editingConfig.id, lastCrawl: editingConfig.lastCrawl });
@@ -605,6 +620,16 @@ export function AdminDashboard() {
                             <DropdownMenuContent align="end">
                               <DropdownMenuItem onClick={() => setEditingConfig(config)}>
                                 Edit configuration
+                              </DropdownMenuItem>
+                              <DropdownMenuItem
+                                onClick={() => {
+                                  if (window.confirm('Are you sure you want to delete this crawler configuration?')) {
+                                    deleteCrawlerMutation.mutate(config.id);
+                                  }
+                                }}
+                                className="text-red-600"
+                              >
+                                Delete configuration
                               </DropdownMenuItem>
                             </DropdownMenuContent>
                           </DropdownMenu>
