@@ -39,7 +39,6 @@ export function CrawlerAnalyzer() {
     },
     onSuccess: (data) => {
       if (previewRef.current) {
-        // Create a new iframe for isolation
         const iframe = document.createElement('iframe');
         iframe.style.width = '100%';
         iframe.style.height = '100%';
@@ -48,11 +47,9 @@ export function CrawlerAnalyzer() {
         iframe.sandbox.add('allow-scripts');
         iframeRef.current = iframe;
 
-        // Clear existing content and append iframe
         previewRef.current.innerHTML = '';
         previewRef.current.appendChild(iframe);
 
-        // Write the HTML content to the iframe
         const iframeDoc = iframe.contentWindow?.document;
         if (iframeDoc) {
           iframeDoc.open();
@@ -62,27 +59,24 @@ export function CrawlerAnalyzer() {
               <head>
                 <base href="${data.url}">
                 <style>
-                  /* Reset outline styles */
                   * { outline: none !important; }
 
-                  /* Highlight selectable elements */
                   *[data-recipe-element] {
-                    transition: outline 0.2s ease-in-out;
+                    transition: all 0.2s ease-in-out;
                   }
 
-                  *[data-recipe-element]:hover {
+                  body.selecting *[data-recipe-element]:hover {
                     outline: 2px dashed #3b82f6 !important;
-                    cursor: pointer !important;
+                    cursor: crosshair !important;
                     position: relative;
                   }
 
-                  /* Style for selected elements */
                   *[data-selected="true"] {
                     outline: 2px solid #22c55e !important;
+                    background-color: rgba(34, 197, 94, 0.1) !important;
                     position: relative;
                   }
 
-                  /* Label for selected elements */
                   *[data-selected="true"]::before {
                     content: attr(data-selector-type);
                     position: absolute;
@@ -95,28 +89,15 @@ export function CrawlerAnalyzer() {
                     font-size: 12px;
                     z-index: 1000;
                   }
-
-                  /* Selection mode indicator */
-                  body.selecting * {
-                    cursor: crosshair !important;
-                  }
-
-                  body.selecting *[data-recipe-element]:hover {
-                    outline: 2px dashed #3b82f6 !important;
-                  }
                 </style>
               </head>
               <body>
                 ${data.html}
                 <script>
-                  // Prevent links from navigating
                   document.addEventListener('click', (e) => {
-                    if (e.target.tagName === 'A') {
-                      e.preventDefault();
-                    }
+                    e.preventDefault();
                   });
 
-                  // Handle messages from parent
                   window.addEventListener('message', (event) => {
                     if (event.data.type === 'setActiveSelector') {
                       document.body.classList.toggle('selecting', event.data.selector !== null);
@@ -128,7 +109,6 @@ export function CrawlerAnalyzer() {
           `);
           iframeDoc.close();
 
-          // Add click event listener to the iframe document
           iframeDoc.addEventListener('click', handleElementClick);
         }
       }
@@ -143,133 +123,71 @@ export function CrawlerAnalyzer() {
     },
   });
 
-  // Function to handle element clicks in the iframe
   const handleElementClick = (e: MouseEvent) => {
     e.preventDefault();
-    if (!activeSelector || !iframeRef.current?.contentWindow?.document) return;
 
-    // Find the closest element with data-recipe-element
+    if (!activeSelector || !iframeRef.current?.contentWindow?.document) {
+      return;
+    }
+
     const target = e.target as HTMLElement;
     if (!target) return;
 
-    let currentElement: HTMLElement | null = target;
-    while (currentElement && !currentElement.getAttribute('data-recipe-element')) {
-      currentElement = currentElement.parentElement;
-    }
-
-    if (!currentElement) return;
-
     const iframeDoc = iframeRef.current.contentWindow.document;
 
-    // Get unique data attribute
-    const elementId = currentElement.getAttribute('data-recipe-element');
-    if (!elementId) return;
-
-    // Remove previous selection for this type
-    const previousSelected = iframeDoc.querySelector(`[data-selected="true"][data-selector-type="${activeSelector}"]`);
-    if (previousSelected) {
-      previousSelected.removeAttribute('data-selected');
-      previousSelected.removeAttribute('data-selector-type');
-    }
-
-    // Mark as selected
-    currentElement.setAttribute('data-selected', 'true');
-    currentElement.setAttribute('data-selector-type', activeSelector);
-
-    // Generate an optimized selector
+    // Generate selector for the clicked element
     let selector = '';
-
-    // Try ID first
-    if (currentElement.id) {
-      selector = `#${currentElement.id}`;
-    } 
-    // Then try unique class combinations
-    else if (currentElement.className) {
-      const classes = Array.from(currentElement.classList)
-        .filter(cls => !cls.includes('hover') && !cls.includes('active'))
-        .filter(cls => iframeDoc.querySelectorAll(`.${cls}`).length === 1)
-        .join('.');
-      if (classes) {
-        selector = `.${classes}`;
-      }
+    if (target.id) {
+      selector = `#${target.id}`;
+    } else if (target.className) {
+      const classes = Array.from(target.classList).join('.');
+      selector = classes ? `.${classes}` : target.tagName.toLowerCase();
+    } else {
+      selector = target.tagName.toLowerCase();
     }
 
-    // If no unique selector found, build one using the element hierarchy
-    if (!selector) {
-      const path: string[] = [];
-      let element: HTMLElement | null = currentElement;
-      let foundUniqueSelector = false;
-
-      while (element && element !== iframeDoc.body && !foundUniqueSelector) {
-        let elementSelector = element.tagName.toLowerCase();
-
-        // Add classes if they help make the selector more specific
-        if (element.className) {
-          const classes = Array.from(element.classList)
-            .filter(cls => !cls.includes('hover') && !cls.includes('active'))
-            .join('.');
-          if (classes) {
-            elementSelector += `.${classes}`;
-          }
-        }
-
-        // Add nth-child if needed
-        const siblings = element.parentElement?.children;
-        if (siblings && siblings.length > 1) {
-          const index = Array.from(siblings).indexOf(element) + 1;
-          elementSelector += `:nth-child(${index})`;
-        }
-
-        path.unshift(elementSelector);
-
-        // Check if current path is unique
-        const testSelector = path.join(' > ');
-        if (iframeDoc.querySelectorAll(testSelector).length === 1) {
-          selector = testSelector;
-          foundUniqueSelector = true;
-        }
-
-        element = element.parentElement;
-      }
-
-      // If still no unique selector, use the full path
-      if (!selector) {
-        selector = path.join(' > ');
-      }
-    }
-
-    // Get the appropriate value based on element type and selector
+    // Extract value based on the type
     let value = '';
-    if (currentElement.tagName.toLowerCase() === 'img') {
-      value = currentElement.getAttribute('src') || '';
+    if (target.tagName.toLowerCase() === 'img') {
+      value = target.getAttribute('src') || '';
     } else if (activeSelector === 'ingredients' || activeSelector === 'instructions') {
-      // For lists, try to get all items
-      const listItems = currentElement.querySelectorAll('li');
+      const listItems = target.querySelectorAll('li');
       if (listItems.length > 0) {
         value = Array.from(listItems)
           .map(item => item.textContent?.trim())
           .filter(Boolean)
           .join('\n');
       } else {
-        value = currentElement.textContent?.trim() || '';
+        value = target.textContent?.trim() || '';
       }
-    } else if (activeSelector === 'prepTime' || activeSelector === 'cookTime') {
-      // Try to extract just the time value
-      const timeText = currentElement.textContent?.trim() || '';
-      const timeMatch = timeText.match(/\d+\s*(?:minute|min|hour|hr|h|m)s?/i);
-      value = timeMatch ? timeMatch[0] : timeText;
     } else {
-      value = currentElement.textContent?.trim() || '';
+      value = target.textContent?.trim() || '';
     }
 
-    // Update selected elements state
+    // Update selections
     setSelectedElements(prev => {
       const filtered = prev.filter(el => el.type !== activeSelector);
       return [...filtered, { selector, type: activeSelector, value }];
     });
 
-    // Clear active selector after selection
+    // Mark element as selected
+    const previousSelected = iframeDoc.querySelector(`[data-selected="true"][data-selector-type="${activeSelector}"]`);
+    if (previousSelected) {
+      previousSelected.removeAttribute('data-selected');
+      previousSelected.removeAttribute('data-selector-type');
+    }
+
+    target.setAttribute('data-selected', 'true');
+    target.setAttribute('data-selector-type', activeSelector);
+
+    // Clear active selector
     setActiveSelector(null);
+
+    // Show success message
+    toast({
+      title: `Selected ${activeSelector}`,
+      description: `Value: ${value.substring(0, 50)}${value.length > 50 ? '...' : ''}`,
+    });
   };
 
   const saveConfigMutation = useMutation({
@@ -285,7 +203,6 @@ export function CrawlerAnalyzer() {
     },
     onSuccess: () => {
       toast({ title: "Configuration saved successfully" });
-      // Reset state
       setSelectedElements([]);
       setUrl("");
       setActiveSelector(null);
@@ -302,7 +219,6 @@ export function CrawlerAnalyzer() {
     },
   });
 
-
   const handleSaveConfig = () => {
     const selectors = selectedElements.reduce((acc, { type, selector }) => {
       acc[type] = selector;
@@ -312,7 +228,6 @@ export function CrawlerAnalyzer() {
     saveConfigMutation.mutate({ url, selectors });
   };
 
-  // Update iframe when activeSelector changes
   useEffect(() => {
     if (iframeRef.current?.contentWindow) {
       iframeRef.current.contentWindow.postMessage({
