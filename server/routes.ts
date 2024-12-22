@@ -9,35 +9,22 @@ import { requirePermissions } from "./middleware/rbac";
 import cron from "node-cron";
 import { log } from "./vite";
 
-const ADMIN_PERMISSIONS = [
-  "manage_users",
-  "manage_roles",
-  "manage_crawler",
-  "view_admin_dashboard"
-];
-
-const MODERATOR_PERMISSIONS = [
-  "moderate_comments",
-  "moderate_recipes",
-  "view_admin_dashboard"
-];
-
 export function registerRoutes(app: Express): Server {
   setupAuth(app);
 
   // Recipe routes
   app.get("/api/recipes", async (req, res) => {
     const { cookware, difficulty } = req.query;
-    let query = db.select().from(recipes);
+    let baseQuery = db.select().from(recipes);
 
     if (cookware) {
-      query = query.where(eq(recipes.cookwareType, cookware as string));
+      baseQuery = baseQuery.where(eq(recipes.cookwareType, cookware as string));
     }
     if (difficulty) {
-      query = query.where(eq(recipes.difficulty, difficulty as string));
+      baseQuery = baseQuery.where(eq(recipes.difficulty, difficulty as string));
     }
 
-    const result = await query.orderBy(desc(recipes.createdAt));
+    const result = await baseQuery.orderBy(desc(recipes.createdAt));
     res.json(result);
   });
 
@@ -72,43 +59,51 @@ export function registerRoutes(app: Express): Server {
   });
 
   app.post("/api/admin/roles", requirePermissions({ permissions: ["manage_roles"] }), async (req, res) => {
-    const { name, permissions } = req.body;
-    const [role] = await db.insert(roles).values({ name, permissions }).returning();
-    res.json(role);
-  });
-
-  app.post("/api/admin/user-roles", requirePermissions({ permissions: ["manage_roles"] }), async (req, res) => {
-    const { userId, roleId } = req.body;
-    const [userRole] = await db.insert(userRoles).values({ userId, roleId }).returning();
-    res.json(userRole);
-  });
-
-  app.delete("/api/admin/user-roles", requirePermissions({ permissions: ["manage_roles"] }), async (req, res) => {
-    const { userId, roleId } = req.body;
-    await db
-      .delete(userRoles)
-      .where(
-        and(
-          eq(userRoles.userId, userId),
-          eq(userRoles.roleId, roleId)
-        )
-      );
-    res.json({ success: true });
+    try {
+      const { name, permissions } = req.body;
+      const [role] = await db.insert(roles).values({ name, permissions }).returning();
+      res.json(role);
+    } catch (error) {
+      log(`Error creating role: ${error}`, "express");
+      res.status(500).json({ error: "Failed to create role" });
+    }
   });
 
   app.get("/api/admin/crawler", requirePermissions({ permissions: ["manage_crawler"] }), async (req, res) => {
-    const configs = await db.select().from(crawlerConfigs);
-    res.json(configs);
+    try {
+      const configs = await db.select().from(crawlerConfigs);
+      res.json(configs);
+    } catch (error) {
+      log(`Error fetching crawler configs: ${error}`, "express");
+      res.status(500).json({ error: "Failed to fetch crawler configurations" });
+    }
   });
 
   app.post("/api/admin/crawler", requirePermissions({ permissions: ["manage_crawler"] }), async (req, res) => {
-    const [config] = await db.insert(crawlerConfigs).values(req.body).returning();
-    res.json(config);
+    try {
+      const [config] = await db.insert(crawlerConfigs).values({
+        siteName: req.body.siteName,
+        siteUrl: req.body.siteUrl,
+        enabled: req.body.enabled,
+        selectors: req.body.selectors,
+      }).returning();
+      res.json(config);
+    } catch (error) {
+      log(`Error creating crawler config: ${error}`, "express");
+      res.status(500).json({ error: "Failed to create crawler configuration" });
+    }
   });
 
   app.post("/api/admin/crawler/run", requirePermissions({ permissions: ["manage_crawler"] }), async (req, res) => {
-    runCrawler().catch(console.error);
-    res.json({ message: "Crawler started" });
+    try {
+      runCrawler().catch(error => {
+        log(`Error running crawler: ${error}`, "express");
+      });
+      res.json({ message: "Crawler started" });
+    } catch (error) {
+      log(`Error initiating crawler: ${error}`, "express");
+      res.status(500).json({ error: "Failed to start crawler" });
+    }
   });
 
   app.post("/api/admin/crawler/analyze", requirePermissions({ permissions: ["manage_crawler"] }), async (req, res) => {
@@ -126,20 +121,24 @@ export function registerRoutes(app: Express): Server {
     }
   });
 
-
   // Comments
   app.post("/api/recipes/:id/comments", async (req, res) => {
     if (!req.isAuthenticated()) {
       return res.status(401).send("Not authenticated");
     }
 
-    const comment = await db.insert(comments).values({
-      content: req.body.content,
-      userId: req.user!.id,
-      recipeId: parseInt(req.params.id),
-    }).returning();
+    try {
+      const [comment] = await db.insert(comments).values({
+        content: req.body.content,
+        userId: req.user!.id,
+        recipeId: parseInt(req.params.id),
+      }).returning();
 
-    res.json(comment[0]);
+      res.json(comment);
+    } catch (error) {
+      log(`Error creating comment: ${error}`, "express");
+      res.status(500).json({ error: "Failed to create comment" });
+    }
   });
 
   // Ratings
@@ -148,51 +147,63 @@ export function registerRoutes(app: Express): Server {
       return res.status(401).send("Not authenticated");
     }
 
-    const [existing] = await db
-      .select()
-      .from(ratings)
-      .where(
-        and(
-          eq(ratings.userId, req.user!.id),
-          eq(ratings.recipeId, parseInt(req.params.id))
-        )
-      );
+    try {
+      const [existing] = await db
+        .select()
+        .from(ratings)
+        .where(
+          and(
+            eq(ratings.userId, req.user!.id),
+            eq(ratings.recipeId, parseInt(req.params.id))
+          )
+        );
 
-    if (existing) {
-      const rating = await db
-        .update(ratings)
-        .set({ rating: req.body.rating })
-        .where(eq(ratings.id, existing.id))
-        .returning();
-      return res.json(rating[0]);
+      if (existing) {
+        const [rating] = await db
+          .update(ratings)
+          .set({ rating: req.body.rating })
+          .where(eq(ratings.id, existing.id))
+          .returning();
+        return res.json(rating);
+      }
+
+      const [rating] = await db.insert(ratings).values({
+        rating: req.body.rating,
+        userId: req.user!.id,
+        recipeId: parseInt(req.params.id),
+      }).returning();
+
+      res.json(rating);
+    } catch (error) {
+      log(`Error updating rating: ${error}`, "express");
+      res.status(500).json({ error: "Failed to update rating" });
     }
-
-    const rating = await db.insert(ratings).values({
-      rating: req.body.rating,
-      userId: req.user!.id,
-      recipeId: parseInt(req.params.id),
-    }).returning();
-
-    res.json(rating[0]);
   });
 
+  // Recipe creation
   app.post("/api/recipes", async (req, res) => {
     if (!req.isAuthenticated()) {
       return res.status(401).send("Not authenticated");
     }
 
-    const recipe = await db.insert(recipes).values({
-      ...req.body,
-      userId: req.user!.id,
-    }).returning();
+    try {
+      const [recipe] = await db.insert(recipes).values({
+        ...req.body,
+        userId: req.user!.id,
+      }).returning();
 
-    res.json(recipe[0]);
+      res.json(recipe);
+    } catch (error) {
+      log(`Error creating recipe: ${error}`, "express");
+      res.status(500).json({ error: "Failed to create recipe" });
+    }
   });
-
 
   // Schedule crawler to run daily
   cron.schedule('0 0 * * *', () => {
-    runCrawler().catch(console.error);
+    runCrawler().catch(error => {
+      log(`Scheduled crawler error: ${error}`, "express");
+    });
   });
 
   const httpServer = createServer(app);

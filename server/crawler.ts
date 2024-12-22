@@ -17,12 +17,12 @@ const DEFAULT_CONFIGS = [
     siteName: "Lodge Cast Iron",
     siteUrl: "https://www.lodgecastiron.com/discover/recipes",
     selectors: {
-      recipeLinks: ".recipe-card a",
-      title: "h1.recipe-title",
-      description: ".recipe-description",
-      ingredients: ".ingredients-list li",
-      instructions: ".instructions-list li",
-    } as Selectors,
+      recipeLinks: ".recipe-card__link",
+      title: ".recipe-detail__title",
+      description: ".recipe-detail__description",
+      ingredients: ".recipe-detail__ingredients-list li",
+      instructions: ".recipe-detail__instructions-list li",
+    } satisfies Selectors,
     enabled: true,
   },
 ];
@@ -50,35 +50,65 @@ async function detectSelectors(url: string): Promise<Selectors> {
     // Common patterns for recipe elements
     const patterns = {
       recipeLinks: [
-        ".recipe-card a", ".recipe a", ".recipe-preview a",
-        "article a", ".post a", "[class*='recipe'] a"
+        ".recipe-card__link",
+        ".recipe-card a",
+        "a[href*='recipe']",
+        "a[href*='recipes']",
+        ".recipe a",
+        ".recipe-preview a",
+        "article.recipe a",
+        ".post a",
+        "[class*='recipe'] a",
+        "a[class*='recipe']",
       ],
       title: [
-        "h1.recipe-title", "h1.entry-title", ".recipe-name",
-        "h1[class*='title']", "h1[class*='recipe']"
+        ".recipe-detail__title",
+        "h1[class*='recipe']",
+        "h1[class*='title']",
+        "h1.recipe-title",
+        "h1.entry-title",
+        ".recipe-name",
+        "[class*='recipe-title']",
+        "[class*='recipe-name']",
       ],
       description: [
-        ".recipe-description", ".entry-content p", ".recipe-summary",
-        "[class*='description']", ".recipe-intro"
+        ".recipe-detail__description",
+        "[class*='recipe-description']",
+        ".recipe-description",
+        ".entry-content p:first-of-type",
+        ".recipe-summary",
+        "[class*='description']",
+        ".recipe-intro",
+        "meta[name='description']",
       ],
       ingredients: [
-        ".ingredients-list li", ".ingredient-list li", ".ingredients li",
-        "[class*='ingredient'] li", "ul[class*='ingredient'] li"
+        ".recipe-detail__ingredients-list li",
+        ".ingredients-list li",
+        ".ingredient-list li",
+        ".ingredients li",
+        "[class*='ingredient'] li",
+        "ul[class*='ingredient'] li",
+        "[class*='ingredients'] li",
       ],
       instructions: [
-        ".instructions-list li", ".directions li", ".steps li",
-        "[class*='instruction'] li", "[class*='step'] li",
-        "[class*='method'] li"
-      ]
+        ".recipe-detail__instructions-list li",
+        ".instructions-list li",
+        ".directions li",
+        ".steps li",
+        "[class*='instruction'] li",
+        "[class*='step'] li",
+        "[class*='method'] li",
+        "[class*='directions'] li",
+      ],
     };
 
-    // Helper function to find first matching selector
+    // Helper function to find first matching selector with content
     const findFirstMatch = (selectors: string[], context: Document | Element = document): string => {
       for (const selector of selectors) {
         try {
           const elements = context.querySelectorAll(selector);
-          if (elements.length > 0) {
-            log(`Found matching selector: ${selector}`, "crawler");
+          if (elements.length > 0 && Array.from(elements).some(el => el.textContent?.trim())) {
+            log(`Found matching selector with content: ${selector}`, "crawler");
             return selector;
           }
         } catch (error) {
@@ -89,7 +119,7 @@ async function detectSelectors(url: string): Promise<Selectors> {
     };
 
     // Find best matching selectors
-    const detectedSelectors = {
+    const detectedSelectors: Selectors = {
       recipeLinks: findFirstMatch(patterns.recipeLinks),
       title: findFirstMatch(patterns.title),
       description: findFirstMatch(patterns.description),
@@ -120,6 +150,29 @@ async function initializeCrawlerConfigs() {
   }
 }
 
+async function normalizeUrl(url: string, baseUrl: string): Promise<string> {
+  try {
+    // Handle relative URLs
+    if (url.startsWith('/')) {
+      const base = new URL(baseUrl);
+      return `${base.protocol}//${base.host}${url}`;
+    }
+    // Handle protocol-relative URLs
+    if (url.startsWith('//')) {
+      const base = new URL(baseUrl);
+      return `${base.protocol}${url}`;
+    }
+    // Handle already absolute URLs
+    if (url.startsWith('http')) {
+      return url;
+    }
+    // Handle relative URLs without leading slash
+    return new URL(url, baseUrl).toString();
+  } catch (error) {
+    log(`Error normalizing URL ${url}: ${error}`, "crawler");
+    throw error;
+  }
+}
 
 export async function crawlRecipe(url: string, selectors: Selectors) {
   try {
@@ -138,17 +191,21 @@ export async function crawlRecipe(url: string, selectors: Selectors) {
     const dom = new JSDOM(html);
     const document = dom.window.document;
 
-    const title = document.querySelector(selectors.title)?.textContent?.trim();
-    const description = document
-      .querySelector(selectors.description)
-      ?.textContent?.trim();
+    // Try multiple selectors for each element
+    const title = document.querySelector(selectors.title)?.textContent?.trim() ||
+                 document.querySelector("h1")?.textContent?.trim();
+
+    const description = document.querySelector(selectors.description)?.textContent?.trim() ||
+                       document.querySelector("meta[name='description']")?.getAttribute("content")?.trim();
+
     const ingredients = Array.from(
-      document.querySelectorAll<HTMLElement>(selectors.ingredients),
+      document.querySelectorAll<HTMLElement>(selectors.ingredients)
     )
       .map((el) => el.textContent?.trim())
       .filter((text): text is string => Boolean(text));
+
     const instructions = Array.from(
-      document.querySelectorAll<HTMLElement>(selectors.instructions),
+      document.querySelectorAll<HTMLElement>(selectors.instructions)
     )
       .map((el) => el.textContent?.trim())
       .filter((text): text is string => Boolean(text));
@@ -177,6 +234,7 @@ export async function crawlRecipe(url: string, selectors: Selectors) {
 
 export async function runCrawler() {
   await initializeCrawlerConfigs();
+
   const configs = await db
     .select()
     .from(crawlerConfigs)
@@ -206,24 +264,24 @@ export async function runCrawler() {
       const dom = new JSDOM(html);
       const document = dom.window.document;
 
-      const recipeLinks = Array.from(
-        document.querySelectorAll<HTMLAnchorElement>(config.selectors.recipeLinks),
-      )
-        .map((link) => {
-          const href = link.href;
-          if (!href) return null;
-          try {
-            return new URL(href, config.siteUrl).toString();
-          } catch (e) {
-            log(`Invalid URL: ${href}`, "crawler");
-            return null;
-          }
-        })
-        .filter((url): url is string => Boolean(url));
+      const recipeLinks = await Promise.all(
+        Array.from(document.querySelectorAll<HTMLAnchorElement>(config.selectors.recipeLinks))
+          .map(async (link) => {
+            const href = link.href || link.getAttribute("href");
+            if (!href) return null;
+            try {
+              return await normalizeUrl(href, config.siteUrl);
+            } catch (e) {
+              log(`Invalid URL: ${href}`, "crawler");
+              return null;
+            }
+          })
+      );
 
-      log(`Found ${recipeLinks.length} recipe links on ${config.siteName}`, "crawler");
+      const validLinks = recipeLinks.filter((url): url is string => Boolean(url));
+      log(`Found ${validLinks.length} recipe links on ${config.siteName}`, "crawler");
 
-      for (const link of recipeLinks) {
+      for (const link of validLinks) {
         await delay(2000); // Ethical crawling delay
         const recipeData = await crawlRecipe(link, config.selectors as Selectors);
 
@@ -257,6 +315,7 @@ export async function analyzeWebsite(url: string): Promise<{
   suggestedConfig: {
     siteName: string;
     siteUrl: string;
+    enabled?: boolean;
     selectors: Selectors;
   };
   sampleData: {
@@ -287,15 +346,18 @@ export async function analyzeWebsite(url: string): Promise<{
     const document = dom.window.document;
 
     // Get sample data using detected selectors
-    const recipeLinks = document.querySelectorAll(selectors.recipeLinks);
-    let sampleRecipe = null;
+    const links = Array.from(document.querySelectorAll<HTMLAnchorElement>(selectors.recipeLinks));
+    const recipeLinks = await Promise.all(
+      links.map(async (link) => {
+        const href = link.href || link.getAttribute("href");
+        return href ? normalizeUrl(href, url) : null;
+      })
+    );
+    const validLinks = recipeLinks.filter((url): url is string => Boolean(url));
 
-    if (recipeLinks.length > 0) {
-      const firstLink = recipeLinks[0] as HTMLAnchorElement;
-      if (firstLink.href) {
-        const recipeUrl = new URL(firstLink.href, url).toString();
-        sampleRecipe = await crawlRecipe(recipeUrl, selectors);
-      }
+    let sampleRecipe = null;
+    if (validLinks.length > 0) {
+      sampleRecipe = await crawlRecipe(validLinks[0], selectors);
     }
 
     // Extract domain name for site name
@@ -311,7 +373,7 @@ export async function analyzeWebsite(url: string): Promise<{
         selectors,
       },
       sampleData: {
-        recipeLinks: recipeLinks.length,
+        recipeLinks: validLinks.length,
         sampleTitle: sampleRecipe?.title,
         sampleDescription: sampleRecipe?.description,
         sampleIngredients: sampleRecipe?.ingredients,
