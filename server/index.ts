@@ -50,22 +50,33 @@ app.use((err: any, _req: Request, res: Response, _next: NextFunction) => {
 
 (async () => {
   try {
-    // Test database connection and schema
+    // Test database connection and initialize schema
     try {
       log("Testing database connection...", "express");
       await db.select().from(users).limit(1);
       log("Database connection successful", "express");
     } catch (error) {
-      log(`Database error: ${error}`, "express");
       if ((error as Error).message.includes('relation "users" does not exist')) {
-        log("Running schema migrations...", "express");
+        log("Database tables don't exist, pushing schema...", "express");
         await execute_sql_tool({
           sql_query: `
             CREATE EXTENSION IF NOT EXISTS "uuid-ossp";
           `
         });
-        log("Schema migrations completed", "express");
+        log("Created uuid extension", "express");
+
+        // Push schema using drizzle-kit
+        const { execSync } = require('child_process');
+        try {
+          log("Pushing schema with drizzle-kit...", "express");
+          execSync('npm run db:push', { stdio: 'inherit' });
+          log("Schema push completed successfully", "express");
+        } catch (pushError) {
+          log(`Error pushing schema: ${pushError}`, "express");
+          throw pushError;
+        }
       } else {
+        log(`Database error: ${error}`, "express");
         throw error;
       }
     }
