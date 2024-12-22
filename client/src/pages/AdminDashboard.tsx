@@ -556,15 +556,36 @@ export function AdminDashboard() {
                             : "Never"}
                         </TableCell>
                         <TableCell>
-                          <span
-                            className={`px-2 py-1 rounded-full text-xs ${
-                              config.enabled
-                                ? "bg-green-100 text-green-800"
-                                : "bg-gray-100 text-gray-800"
-                            }`}
-                          >
-                            {config.enabled ? "Active" : "Disabled"}
-                          </span>
+                          <div className="flex items-center gap-2">
+                            <Switch
+                              checked={config.enabled}
+                              onCheckedChange={async (enabled) => {
+                                try {
+                                  await updateCrawlerMutation.mutateAsync({
+                                    ...config,
+                                    enabled,
+                                  });
+                                  toast({
+                                    title: `Crawler ${enabled ? "enabled" : "disabled"} successfully`,
+                                  });
+                                } catch (error) {
+                                  toast({
+                                    title: "Failed to update crawler status",
+                                    variant: "destructive",
+                                  });
+                                }
+                              }}
+                            />
+                            <span
+                              className={`text-sm ${
+                                config.enabled
+                                  ? "text-green-600"
+                                  : "text-gray-500"
+                              }`}
+                            >
+                              {config.enabled ? "Active" : "Disabled"}
+                            </span>
+                          </div>
                         </TableCell>
                         <TableCell>
                           <DropdownMenu>

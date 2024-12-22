@@ -12,37 +12,44 @@ interface Selectors {
   recipeLinks: string;
 }
 
-const DEFAULT_CONFIGS = [
-  {
-    siteName: "Lodge Cast Iron",
-    siteUrl: "https://www.lodgecastiron.com/discover/recipes",
-    selectors: {
-      recipeLinks: ".recipe-card__link",
-      title: ".recipe-detail__title",
-      description: ".recipe-detail__description",
-      ingredients: ".recipe-detail__ingredients-list li",
-      instructions: ".recipe-detail__instructions-list li",
-    } satisfies Selectors,
-    enabled: true,
-  },
-];
+async function delay(ms: number) {
+  return new Promise(resolve => setTimeout(resolve, ms));
+}
 
-const delay = (ms: number) => new Promise((resolve) => setTimeout(resolve, ms));
+async function fetchWithRetry(url: string, maxRetries = 3): Promise<Response> {
+  let lastError: Error | null = null;
+
+  for (let attempt = 1; attempt <= maxRetries; attempt++) {
+    try {
+      log(`Attempt ${attempt} to fetch ${url}`, "crawler");
+      const response = await fetch(url, {
+        headers: {
+          "User-Agent": "Mozilla/5.0 (compatible; CastIronRecipeCrawler/1.0; +https://mycookwarecare.com)",
+        },
+      });
+
+      if (!response.ok) {
+        throw new Error(`HTTP error! status: ${response.status}`);
+      }
+
+      return response;
+    } catch (error) {
+      lastError = error as Error;
+      log(`Fetch attempt ${attempt} failed: ${error}`, "crawler");
+      if (attempt < maxRetries) {
+        await delay(1000 * attempt); // Exponential backoff
+      }
+    }
+  }
+
+  throw lastError;
+}
 
 async function detectSelectors(url: string): Promise<Selectors> {
   log(`Analyzing page structure for ${url}`, "crawler");
 
   try {
-    const response = await fetch(url, {
-      headers: {
-        "User-Agent": "Mozilla/5.0 (compatible; CastIronRecipeCrawler/1.0; +https://mycookwarecare.com)",
-      },
-    });
-
-    if (!response.ok) {
-      throw new Error(`Failed to fetch URL: ${response.status} ${response.statusText}`);
-    }
-
+    const response = await fetchWithRetry(url);
     const html = await response.text();
     const dom = new JSDOM(html);
     const document = dom.window.document;
@@ -70,6 +77,7 @@ async function detectSelectors(url: string): Promise<Selectors> {
         ".recipe-name",
         "[class*='recipe-title']",
         "[class*='recipe-name']",
+        "h1",  // Fallback to first h1
       ],
       description: [
         ".recipe-detail__description",
@@ -80,6 +88,7 @@ async function detectSelectors(url: string): Promise<Selectors> {
         "[class*='description']",
         ".recipe-intro",
         "meta[name='description']",
+        ".content p:first-of-type",  // Fallback to first paragraph
       ],
       ingredients: [
         ".recipe-detail__ingredients-list li",
@@ -89,6 +98,7 @@ async function detectSelectors(url: string): Promise<Selectors> {
         "[class*='ingredient'] li",
         "ul[class*='ingredient'] li",
         "[class*='ingredients'] li",
+        "ul li",  // Fallback to any list items
       ],
       instructions: [
         ".recipe-detail__instructions-list li",
@@ -99,6 +109,7 @@ async function detectSelectors(url: string): Promise<Selectors> {
         "[class*='step'] li",
         "[class*='method'] li",
         "[class*='directions'] li",
+        "ol li",  // Fallback to ordered list items
       ],
     };
 
@@ -136,26 +147,6 @@ async function detectSelectors(url: string): Promise<Selectors> {
   }
 }
 
-async function initializeCrawlerConfigs() {
-  try {
-    log("Initializing default crawler configurations", "crawler");
-    for (const config of DEFAULT_CONFIGS) {
-      const [existing] = await db
-        .select()
-        .from(crawlerConfigs)
-        .where(eq(crawlerConfigs.siteName, config.siteName));
-
-      if (!existing) {
-        await db.insert(crawlerConfigs).values(config);
-        log(`Created default config for ${config.siteName}`, "crawler");
-      }
-    }
-  } catch (error) {
-    log(`Error initializing crawler configs: ${error}`, "crawler");
-    throw error;
-  }
-}
-
 async function normalizeUrl(url: string, baseUrl: string): Promise<string> {
   try {
     const base = new URL(baseUrl);
@@ -170,16 +161,7 @@ async function normalizeUrl(url: string, baseUrl: string): Promise<string> {
 async function crawlRecipe(url: string, selectors: Selectors) {
   try {
     log(`Crawling recipe from ${url}`, "crawler");
-    const response = await fetch(url, {
-      headers: {
-        "User-Agent": "Mozilla/5.0 (compatible; CastIronRecipeCrawler/1.0; +https://mycookwarecare.com)",
-      },
-    });
-
-    if (!response.ok) {
-      throw new Error(`Failed to fetch URL: ${response.status} ${response.statusText}`);
-    }
-
+    const response = await fetchWithRetry(url);
     const html = await response.text();
     const dom = new JSDOM(html);
     const document = dom.window.document;
@@ -226,35 +208,33 @@ async function crawlRecipe(url: string, selectors: Selectors) {
 
 export async function runCrawler() {
   try {
-    await initializeCrawlerConfigs();
-
+    log("Starting crawler run", "crawler");
     const configs = await db
       .select()
       .from(crawlerConfigs)
       .where(eq(crawlerConfigs.enabled, true));
 
+    log(`Found ${configs.length} enabled crawler configurations`, "crawler");
+
     for (const config of configs) {
       try {
-        log(`Starting crawl for ${config.siteName}`, "crawler");
+        log(`Processing crawler for ${config.siteName}`, "crawler");
 
         let selectorsToUse: Selectors;
         if (!config.selectors || Object.keys(config.selectors).length === 0) {
           log(`No selectors defined for ${config.siteName}, attempting to detect...`, "crawler");
           selectorsToUse = await detectSelectors(config.siteUrl);
+
+          // Update the config with detected selectors
+          await db
+            .update(crawlerConfigs)
+            .set({ selectors: selectorsToUse })
+            .where(eq(crawlerConfigs.id, config.id));
         } else {
           selectorsToUse = config.selectors as Selectors;
         }
 
-        const response = await fetch(config.siteUrl, {
-          headers: {
-            "User-Agent": "Mozilla/5.0 (compatible; CastIronRecipeCrawler/1.0; +https://mycookwarecare.com)",
-          },
-        });
-
-        if (!response.ok) {
-          throw new Error(`Failed to fetch site: ${response.status} ${response.statusText}`);
-        }
-
+        const response = await fetchWithRetry(config.siteUrl);
         const html = await response.text();
         const dom = new JSDOM(html);
         const document = dom.window.document;
@@ -314,53 +294,28 @@ export async function runCrawler() {
   }
 }
 
-export async function analyzeWebsite(url: string): Promise<{
-  suggestedConfig: {
-    siteName: string;
-    siteUrl: string;
-    enabled?: boolean;
-    selectors: Selectors;
-  };
-  sampleData: {
-    recipeLinks: number;
-    sampleTitle?: string;
-    sampleDescription?: string;
-    sampleIngredients?: string[];
-    sampleInstructions?: string[];
-  };
-}> {
+export async function analyzeWebsite(url: string) {
   try {
     log(`Analyzing website: ${url}`, "crawler");
     const selectors = await detectSelectors(url);
 
-    // Fetch the page to test the detected selectors
-    const response = await fetch(url, {
-      headers: {
-        "User-Agent": "Mozilla/5.0 (compatible; CastIronRecipeCrawler/1.0; +https://mycookwarecare.com)",
-      },
-    });
-
-    if (!response.ok) {
-      throw new Error(`Failed to fetch URL: ${response.status} ${response.statusText}`);
-    }
-
+    // Test the detected selectors
+    const response = await fetchWithRetry(url);
     const html = await response.text();
     const dom = new JSDOM(html);
     const document = dom.window.document;
 
-    // Get sample data using detected selectors
     const links = document.querySelectorAll<HTMLAnchorElement>(selectors.recipeLinks);
-    const recipeLinks = await Promise.all(
+    const recipeLinks = (await Promise.all(
       Array.from(links).map(async (link) => {
         const href = link.href || link.getAttribute("href");
         return href ? normalizeUrl(href, url) : null;
       })
-    );
-    const validLinks = recipeLinks.filter((url): url is string => Boolean(url));
+    )).filter((url): url is string => Boolean(url));
 
     let sampleRecipe = null;
-    if (validLinks.length > 0) {
-      sampleRecipe = await crawlRecipe(validLinks[0], selectors);
+    if (recipeLinks.length > 0) {
+      sampleRecipe = await crawlRecipe(recipeLinks[0], selectors);
     }
 
     // Extract domain name for site name
@@ -376,7 +331,7 @@ export async function analyzeWebsite(url: string): Promise<{
         selectors,
       },
       sampleData: {
-        recipeLinks: validLinks.length,
+        recipeLinks: recipeLinks.length,
         sampleTitle: sampleRecipe?.title,
         sampleDescription: sampleRecipe?.description,
         sampleIngredients: sampleRecipe?.ingredients,
@@ -385,6 +340,41 @@ export async function analyzeWebsite(url: string): Promise<{
     };
   } catch (error) {
     log(`Error analyzing website: ${error}`, "crawler");
+    throw error;
+  }
+}
+
+const DEFAULT_CONFIGS = [
+  {
+    siteName: "Lodge Cast Iron",
+    siteUrl: "https://www.lodgecastiron.com/discover/recipes",
+    selectors: {
+      recipeLinks: ".recipe-card__link",
+      title: ".recipe-detail__title",
+      description: ".recipe-detail__description",
+      ingredients: ".recipe-detail__ingredients-list li",
+      instructions: ".recipe-detail__instructions-list li",
+    } satisfies Selectors,
+    enabled: true,
+  },
+];
+
+async function initializeCrawlerConfigs() {
+  try {
+    log("Initializing default crawler configurations", "crawler");
+    for (const config of DEFAULT_CONFIGS) {
+      const [existing] = await db
+        .select()
+        .from(crawlerConfigs)
+        .where(eq(crawlerConfigs.siteName, config.siteName));
+
+      if (!existing) {
+        await db.insert(crawlerConfigs).values(config);
+        log(`Created default config for ${config.siteName}`, "crawler");
+      }
+    }
+  } catch (error) {
+    log(`Error initializing crawler configs: ${error}`, "crawler");
     throw error;
   }
 }
