@@ -1,7 +1,7 @@
 import { JSDOM } from "jsdom";
 import { db } from "@db";
 import { crawlerConfigs, recipes, type CrawlerConfig } from "@db/schema";
-import { eq } from "drizzle-orm";
+import { eq, and } from "drizzle-orm";
 import { log } from "./vite";
 
 interface Selectors {
@@ -258,11 +258,32 @@ export async function runCrawler() {
         const validLinks = recipeLinks.filter((url): url is string => Boolean(url));
         log(`Found ${validLinks.length} valid recipe links on ${config.siteName}`, "crawler");
 
+        let newRecipes = 0;
+        let duplicates = 0;
+
         for (const link of validLinks) {
           await delay(2000); // Ethical crawling delay
           const recipeData = await crawlRecipe(link, selectorsToUse);
 
           if (recipeData) {
+            // Check if recipe already exists
+            const [existingRecipe] = await db
+              .select()
+              .from(recipes)
+              .where(
+                and(
+                  eq(recipes.title, recipeData.title),
+                  eq(recipes.sourceName, config.siteName)
+                )
+              )
+              .limit(1);
+
+            if (existingRecipe) {
+              log(`Skipping duplicate recipe: ${recipeData.title} from ${config.siteName}`, "crawler");
+              duplicates++;
+              continue;
+            }
+
             await db.insert(recipes).values({
               ...recipeData,
               cookwareType: "skillet", // Default value
@@ -273,8 +294,13 @@ export async function runCrawler() {
               sourceName: config.siteName,
             });
             log(`Successfully saved recipe: ${recipeData.title}`, "crawler");
+            newRecipes++;
           }
         }
+
+        log(`Crawl summary for ${config.siteName}:`, "crawler");
+        log(`- New recipes: ${newRecipes}`, "crawler");
+        log(`- Duplicates skipped: ${duplicates}`, "crawler");
 
         await db
           .update(crawlerConfigs)

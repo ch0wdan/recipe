@@ -50,32 +50,21 @@ app.use((err: any, _req: Request, res: Response, _next: NextFunction) => {
 
 (async () => {
   try {
-    // Ensure database is provisioned
-    if (!process.env.DATABASE_URL) {
-      log("Database URL not found. Provisioning database...", "express");
-      await create_postgresql_database_tool();
-      log("Database provisioned successfully", "express");
-    }
-
     // Test database connection and schema
     try {
       log("Testing database connection...", "express");
       await db.select().from(users).limit(1);
       log("Database connection successful", "express");
     } catch (error) {
+      log(`Database error: ${error}`, "express");
       if ((error as Error).message.includes('relation "users" does not exist')) {
-        log("Database schema not found. Running schema push...", "express");
+        log("Running schema migrations...", "express");
         await execute_sql_tool({
           sql_query: `
-            DO $$ BEGIN
-              CREATE EXTENSION IF NOT EXISTS "uuid-ossp";
-            EXCEPTION
-              WHEN insufficient_privilege THEN
-                NULL;
-            END $$;
+            CREATE EXTENSION IF NOT EXISTS "uuid-ossp";
           `
         });
-        log("Schema push completed", "express");
+        log("Schema migrations completed", "express");
       } else {
         throw error;
       }
