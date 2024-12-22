@@ -1,4 +1,4 @@
-import { useState } from "react";
+import { useState, useEffect, useRef } from "react";
 import { useMutation } from "@tanstack/react-query";
 import { useToast } from "@/hooks/use-toast";
 import {
@@ -23,6 +23,7 @@ export function CrawlerAnalyzer() {
   const [url, setUrl] = useState("");
   const [selectedElements, setSelectedElements] = useState<SelectedElement[]>([]);
   const [activeSelector, setActiveSelector] = useState<SelectedElement["type"] | null>(null);
+  const previewRef = useRef<HTMLDivElement>(null);
 
   const analyzeUrlMutation = useMutation({
     mutationFn: async (url: string) => {
@@ -35,8 +36,62 @@ export function CrawlerAnalyzer() {
       if (!response.ok) throw new Error(await response.text());
       return response.json();
     },
-    onSuccess: () => {
+    onSuccess: (data) => {
+      if (previewRef.current) {
+        // Create a new iframe for isolation
+        const iframe = document.createElement('iframe');
+        iframe.style.width = '100%';
+        iframe.style.height = '100%';
+        iframe.style.border = 'none';
+
+        // Clear existing content and append iframe
+        previewRef.current.innerHTML = '';
+        previewRef.current.appendChild(iframe);
+
+        // Write the HTML content to the iframe
+        const iframeDoc = iframe.contentWindow?.document;
+        if (iframeDoc) {
+          iframeDoc.open();
+          iframeDoc.write(data.html);
+          iframeDoc.close();
+
+          // Add click event listener to the iframe document
+          iframeDoc.addEventListener('click', (e) => {
+            e.preventDefault();
+            if (!activeSelector) return;
+
+            const target = e.target as HTMLElement;
+            if (!target) return;
+
+            // Get unique data attribute
+            const elementId = target.getAttribute('data-recipe-element');
+            if (!elementId) return;
+
+            // Generate a selector for this element
+            let selector = '';
+            if (target.id) {
+              selector = `#${target.id}`;
+            } else if (target.className) {
+              selector = `.${target.className.split(' ').join('.')}`;
+            } else {
+              selector = `[data-recipe-element="${elementId}"]`;
+            }
+
+            // Get the text content
+            const value = target.textContent?.trim() || '';
+
+            handleElementSelection(selector, value);
+          });
+        }
+      }
       toast({ title: "Page loaded successfully" });
+    },
+    onError: (error) => {
+      toast({ 
+        title: "Failed to load page", 
+        description: error.message,
+        variant: "destructive"
+      });
     },
   });
 
@@ -53,6 +108,19 @@ export function CrawlerAnalyzer() {
     },
     onSuccess: () => {
       toast({ title: "Configuration saved successfully" });
+      // Reset state
+      setSelectedElements([]);
+      setUrl("");
+      if (previewRef.current) {
+        previewRef.current.innerHTML = '';
+      }
+    },
+    onError: (error) => {
+      toast({ 
+        title: "Failed to save configuration", 
+        description: error.message,
+        variant: "destructive"
+      });
     },
   });
 
@@ -149,16 +217,20 @@ export function CrawlerAnalyzer() {
                 <Button
                   className="mt-4 w-full"
                   onClick={handleSaveConfig}
-                  disabled={selectedElements.length === 0}
+                  disabled={selectedElements.length === 0 || saveConfigMutation.isPending}
                 >
+                  {saveConfigMutation.isPending ? (
+                    <Loader2 className="h-4 w-4 animate-spin mr-2" />
+                  ) : null}
                   Save Configuration
                 </Button>
               </div>
 
               <div className="border rounded-lg overflow-hidden">
-                <div id="page-preview" className="w-full h-[600px]">
-                  {/* Page content will be injected here */}
-                </div>
+                <div 
+                  ref={previewRef} 
+                  className="w-full h-[600px]"
+                ></div>
               </div>
             </div>
           </div>
