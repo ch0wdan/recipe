@@ -5,7 +5,7 @@ import { eq, and } from "drizzle-orm";
 import { log } from "./vite";
 import { z } from "zod";
 
-// Define strict types for crawler configuration
+// Updated schema with more flexible validation
 export const selectorsSchema = z.object({
   recipeLinks: z.string(),
   title: z.string(),
@@ -16,6 +16,23 @@ export const selectorsSchema = z.object({
 });
 
 type Selectors = z.infer<typeof selectorsSchema>;
+
+// Initial crawler configurations
+export const DEFAULT_CONFIGS = [
+  {
+    siteName: "Lodge Cast Iron",
+    siteUrl: "https://www.lodgecastiron.com/recipes",
+    selectors: {
+      recipeLinks: ".recipe-card a, a[href*='recipe'], a[href*='recipes']",
+      title: "h1",
+      description: ".recipe-description, meta[name='description']",
+      ingredients: ".ingredients-list li, .recipe-ingredients li",
+      instructions: ".instructions-list li, .recipe-steps li",
+      image: ".recipe-image img, meta[property='og:image']"
+    },
+    enabled: true,
+  },
+];
 
 async function delay(ms: number) {
   return new Promise(resolve => setTimeout(resolve, ms));
@@ -55,7 +72,6 @@ async function normalizeUrl(url: string, baseUrl: string): Promise<string> {
     const cleanUrl = url.trim().replace(/\s+/g, '');
     if (!cleanUrl) return '';
 
-    // Handle data URLs (common for images)
     if (cleanUrl.startsWith('data:')) {
       return cleanUrl;
     }
@@ -83,73 +99,18 @@ async function normalizeUrl(url: string, baseUrl: string): Promise<string> {
   }
 }
 
-async function findImageUrl(document: Document, baseUrl: string): Promise<string | null> {
-  try {
-    const selectors = [
-      'meta[property="og:image"]',
-      'meta[name="og:image"]',
-      'meta[property="twitter:image"]',
-      'meta[name="twitter:image"]',
-      'img[itemprop="image"]',
-      '.recipe-image img',
-      '.hero-image img',
-      'img.recipe-photo',
-      'img.hero',
-      'img.main-image',
-    ];
-
-    for (const selector of selectors) {
-      try {
-        const element = document.querySelector(selector);
-        if (!element) continue;
-
-        const url = element.tagName.toLowerCase() === 'meta' 
-          ? element.getAttribute('content')
-          : element.getAttribute('src') || element.getAttribute('data-src');
-
-        if (url) {
-          const normalizedUrl = await normalizeUrl(url, baseUrl);
-          if (normalizedUrl) {
-            log(`Found image URL using selector ${selector}: ${normalizedUrl}`, "crawler");
-            return normalizedUrl;
-          }
-        }
-      } catch (err) {
-        log(`Error processing selector ${selector}: ${err}`, "crawler");
-        continue;
-      }
-    }
-
-    // Fallback: try to find any image with recipe-related classes or attributes
-    const imgElements = document.getElementsByTagName('img');
-    for (const img of Array.from(imgElements)) {
-      const src = img.getAttribute('src') || img.getAttribute('data-src');
-      if (src && (
-        img.className.toLowerCase().includes('recipe') ||
-        img.id.toLowerCase().includes('recipe') ||
-        src.toLowerCase().includes('recipe')
-      )) {
-        const normalizedUrl = await normalizeUrl(src, baseUrl);
-        if (normalizedUrl) {
-          log(`Found image URL using fallback: ${normalizedUrl}`, "crawler");
-          return normalizedUrl;
-        }
-      }
-    }
-
-    log('No suitable image found', "crawler");
-    return null;
-  } catch (error) {
-    log(`Error finding image URL: ${error}`, "crawler");
-    return null;
-  }
-}
-
 async function findRecipeLinks(document: Document, selector: string, baseUrl: string): Promise<string[]> {
   try {
     log(`Looking for recipe links using selector: ${selector}`, "crawler");
     const links = Array.from(document.querySelectorAll(selector));
     log(`Found ${links.length} potential link elements`, "crawler");
+
+    // Debug the HTML structure
+    const parentElement = document.querySelector(selector)?.parentElement;
+    if (parentElement) {
+      log(`Parent element structure:`, "crawler");
+      log(parentElement.outerHTML.slice(0, 500), "crawler");
+    }
 
     const validLinks = new Set<string>();
     for (const link of links) {
@@ -160,12 +121,9 @@ async function findRecipeLinks(document: Document, selector: string, baseUrl: st
         const normalizedUrl = await normalizeUrl(href, baseUrl);
         if (!normalizedUrl) continue;
 
-        const isRecipeUrl = 
+        const isRecipeUrl =
           normalizedUrl.toLowerCase().includes('recipe') ||
-          normalizedUrl.toLowerCase().includes('recipes') ||
-          normalizedUrl.toLowerCase().includes('cooking') ||
-          normalizedUrl.toLowerCase().includes('food') ||
-          /\d{4}|\d{2}/.test(normalizedUrl);
+          normalizedUrl.toLowerCase().includes('recipes');
 
         if (isRecipeUrl) {
           validLinks.add(normalizedUrl);
@@ -191,28 +149,112 @@ async function crawlRecipe(url: string, selectors: Selectors): Promise<any> {
     const dom = new JSDOM(html);
     const document = dom.window.document;
 
-    const title = document.querySelector(selectors.title)?.textContent?.trim();
-    log(`Found title: ${title}`, "crawler");
+    // Debug HTML structure
+    log(`Page HTML structure:`, "crawler");
+    log(document.documentElement.outerHTML.slice(0, 1000), "crawler");
 
-    const description = document.querySelector(selectors.description)?.textContent?.trim() ||
-                       document.querySelector("meta[name='description']")?.getAttribute("content")?.trim();
-    log(`Found description: ${description?.substring(0, 100)}...`, "crawler");
+    // Try multiple selectors for title
+    const titleSelectors = [selectors.title, "h1.recipe-title", "h1.entry-title", "h1"];
+    let title: string | undefined;
+    for (const selector of titleSelectors) {
+      title = document.querySelector(selector)?.textContent?.trim();
+      if (title) {
+        log(`Found title using selector ${selector}: ${title}`, "crawler");
+        break;
+      }
+    }
 
-    const imageUrl = await findImageUrl(document, url);
-    log(`Found image URL: ${imageUrl}`, "crawler");
+    // Try multiple selectors for description
+    const descriptionSelectors = [
+      selectors.description,
+      "meta[name='description']",
+      ".recipe-description",
+      ".recipe-summary"
+    ];
+    let description: string | undefined;
+    for (const selector of descriptionSelectors) {
+      const element = document.querySelector(selector);
+      description = element?.getAttribute('content') || element?.textContent?.trim();
+      if (description) {
+        log(`Found description using selector ${selector}: ${description}`, "crawler");
+        break;
+      }
+    }
 
-    const ingredients = Array.from(document.querySelectorAll(selectors.ingredients))
-      .map(el => el.textContent?.trim())
-      .filter((text): text is string => !!text && text.length > 1);
-    log(`Found ${ingredients.length} ingredients`, "crawler");
+    // Try multiple selectors for ingredients
+    const ingredientSelectors = [
+      selectors.ingredients,
+      ".recipe-ingredients li",
+      ".ingredients-list li",
+      "[itemprop='recipeIngredient']"
+    ];
+    let ingredients: string[] = [];
+    for (const selector of ingredientSelectors) {
+      const elements = document.querySelectorAll(selector);
+      if (elements.length > 0) {
+        ingredients = Array.from(elements)
+          .map(el => el.textContent?.trim())
+          .filter((text): text is string => !!text && text.length > 1);
+        if (ingredients.length > 0) {
+          log(`Found ${ingredients.length} ingredients using selector ${selector}`, "crawler");
+          break;
+        }
+      }
+    }
 
-    const instructions = Array.from(document.querySelectorAll(selectors.instructions))
-      .map(el => el.textContent?.trim())
-      .filter((text): text is string => !!text && text.length > 5);
-    log(`Found ${instructions.length} instructions`, "crawler");
+    // Try multiple selectors for instructions
+    const instructionSelectors = [
+      selectors.instructions,
+      ".recipe-instructions li",
+      ".recipe-steps li",
+      "[itemprop='recipeInstructions'] li"
+    ];
+    let instructions: string[] = [];
+    for (const selector of instructionSelectors) {
+      const elements = document.querySelectorAll(selector);
+      if (elements.length > 0) {
+        instructions = Array.from(elements)
+          .map(el => el.textContent?.trim())
+          .filter((text): text is string => !!text && text.length > 5);
+        if (instructions.length > 0) {
+          log(`Found ${instructions.length} instructions using selector ${selector}`, "crawler");
+          break;
+        }
+      }
+    }
+
+    // Try to find image URL
+    const imageSelectors = [
+      "meta[property='og:image']",
+      "meta[name='og:image']",
+      ".recipe-image img",
+      ".hero-image img",
+      "img[itemprop='image']"
+    ];
+    let imageUrl: string | null = null;
+    for (const selector of imageSelectors) {
+      const element = document.querySelector(selector);
+      if (!element) continue;
+
+      const url = element.tagName.toLowerCase() === 'meta'
+        ? element.getAttribute('content')
+        : element.getAttribute('src') || element.getAttribute('data-src');
+
+      if (url) {
+        imageUrl = await normalizeUrl(url, url);
+        if (imageUrl) {
+          log(`Found image URL using selector ${selector}: ${imageUrl}`, "crawler");
+          break;
+        }
+      }
+    }
 
     if (!title || !description || ingredients.length === 0 || instructions.length === 0) {
       log(`Failed to extract required recipe data from ${url}`, "crawler");
+      log(`Title: ${title ? "Found" : "Missing"}`, "crawler");
+      log(`Description: ${description ? "Found" : "Missing"}`, "crawler");
+      log(`Ingredients: ${ingredients.length} found`, "crawler");
+      log(`Instructions: ${instructions.length} found`, "crawler");
       return null;
     }
 
@@ -257,31 +299,35 @@ export async function runCrawler() {
           const recipeData = await crawlRecipe(link, selectors);
 
           if (recipeData) {
-            // Check for duplicates
-            const [existingRecipe] = await db
-              .select()
-              .from(recipes)
-              .where(
-                and(
-                  eq(recipes.title, recipeData.title),
-                  eq(recipes.sourceName, config.siteName)
+            try {
+              // Check for duplicates
+              const [existingRecipe] = await db
+                .select()
+                .from(recipes)
+                .where(
+                  and(
+                    eq(recipes.title, recipeData.title),
+                    eq(recipes.sourceName, config.siteName)
+                  )
                 )
-              )
-              .limit(1);
+                .limit(1);
 
-            if (!existingRecipe) {
-              await db.insert(recipes).values({
-                ...recipeData,
-                cookwareType: "skillet",
-                difficulty: "medium",
-                prepTime: 30,
-                cookTime: 30,
-                servings: 4,
-                sourceName: config.siteName,
-              });
-              log(`Successfully saved recipe: ${recipeData.title}`, "crawler");
-            } else {
-              log(`Skipping duplicate recipe: ${recipeData.title}`, "crawler");
+              if (!existingRecipe) {
+                await db.insert(recipes).values({
+                  ...recipeData,
+                  cookwareType: "skillet",
+                  difficulty: "medium",
+                  prepTime: 30,
+                  cookTime: 30,
+                  servings: 4,
+                  sourceName: config.siteName,
+                });
+                log(`Successfully saved recipe: ${recipeData.title}`, "crawler");
+              } else {
+                log(`Skipping duplicate recipe: ${recipeData.title}`, "crawler");
+              }
+            } catch (error) {
+              log(`Error saving recipe ${recipeData.title}: ${error}`, "crawler");
             }
           }
         }
@@ -378,23 +424,6 @@ export async function analyzeWebsite(url: string) {
     throw error;
   }
 }
-
-// Initial crawler configurations
-export const DEFAULT_CONFIGS = [
-  {
-    siteName: "Lodge Cast Iron",
-    siteUrl: "https://www.lodgecastiron.com/recipes",
-    selectors: {
-      recipeLinks: "a[href*='recipe'], a[href*='recipes'], .recipe-card a",
-      title: "h1",
-      description: ".recipe-description, meta[name='description']",
-      ingredients: ".ingredients-list li",
-      instructions: ".instructions-list li",
-      image: ".recipe-image img, .hero-image img, img[class*='recipe'], [itemprop='image'], meta[property='og:image']"
-    },
-    enabled: true,
-  },
-];
 
 export async function initializeCrawlerConfigs() {
   try {
