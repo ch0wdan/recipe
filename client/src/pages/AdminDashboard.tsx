@@ -220,6 +220,19 @@ export function AdminDashboard() {
         enabled: editingConfig.enabled,
         selectors: editingConfig.selectors,
       });
+    } else {
+      crawlerForm.reset({
+        siteName: "",
+        siteUrl: "",
+        enabled: true,
+        selectors: {
+          recipeLinks: "",
+          title: "",
+          description: "",
+          ingredients: "",
+          instructions: "",
+        },
+      });
     }
   }, [editingConfig, crawlerForm]);
 
@@ -360,7 +373,10 @@ export function AdminDashboard() {
             <div className="flex justify-between items-center mb-8">
               <h2 className="text-3xl font-bold">Crawler Management</h2>
               <div className="flex gap-2">
-                <Dialog open={!!editingConfig || undefined} onOpenChange={(open) => !open && setEditingConfig(null)}>
+                <Dialog
+                  open={!!editingConfig || undefined}
+                  onOpenChange={(open) => !open && setEditingConfig(null)}
+                >
                   <DialogTrigger asChild>
                     <Button variant="outline">
                       <Plus className="h-4 w-4 mr-2" />
@@ -369,7 +385,9 @@ export function AdminDashboard() {
                   </DialogTrigger>
                   <DialogContent className="max-w-2xl">
                     <DialogHeader>
-                      <DialogTitle>{editingConfig ? "Edit Recipe Website" : "Add New Recipe Website"}</DialogTitle>
+                      <DialogTitle>
+                        {editingConfig ? "Edit Recipe Website" : "Add New Recipe Website"}
+                      </DialogTitle>
                     </DialogHeader>
                     <Form {...crawlerForm}>
                       <form
