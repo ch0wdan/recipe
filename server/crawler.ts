@@ -83,6 +83,13 @@ async function findRecipeLinks(document: Document, selector: string, baseUrl: st
   const links = Array.from(document.querySelectorAll<HTMLAnchorElement>(selector));
   log(`Found ${links.length} potential link elements`, "crawler");
 
+  // Log the HTML structure around where we expect to find links
+  const parentElement = document.querySelector(selector)?.parentElement;
+  if (parentElement) {
+    log(`Parent element HTML structure:`, "crawler");
+    log(parentElement.outerHTML.slice(0, 500), "crawler"); // Log first 500 chars to avoid overwhelming logs
+  }
+
   const recipeLinks = await Promise.all(
     links.map(async (link) => {
       const href = link.href || link.getAttribute("href");
@@ -92,13 +99,19 @@ async function findRecipeLinks(document: Document, selector: string, baseUrl: st
         const normalizedUrl = await normalizeUrl(href, baseUrl);
         if (!normalizedUrl) return null;
 
-        // Enhanced recipe URL detection
-        const isRecipeUrl = normalizedUrl.includes('/recipe') ||
-          normalizedUrl.includes('/recipes') ||
-          normalizedUrl.includes('cast-iron') ||
-          normalizedUrl.includes('cookware') ||
-          /\d{4}|\d{2}/.test(normalizedUrl); // Often recipes have dates or IDs in URL
+        // Enhanced recipe URL detection - more flexible patterns
+        const isRecipeUrl = normalizedUrl.toLowerCase().includes('recipe') ||
+          normalizedUrl.toLowerCase().includes('recipes') ||
+          normalizedUrl.toLowerCase().includes('cast-iron') ||
+          normalizedUrl.toLowerCase().includes('cookware') ||
+          /\d{4}|\d{2}/.test(normalizedUrl) || // Often recipes have dates or IDs in URL
+          normalizedUrl.includes('/cooking/') ||
+          normalizedUrl.includes('/food/') ||
+          normalizedUrl.includes('/dish/');
 
+        if (isRecipeUrl) {
+          log(`Found valid recipe link: ${normalizedUrl}`, "crawler");
+        }
         return isRecipeUrl ? normalizedUrl : null;
       } catch (e) {
         log(`Invalid URL: ${href}`, "crawler");
@@ -398,11 +411,11 @@ const DEFAULT_CONFIGS = [
     siteName: "Lodge Cast Iron",
     siteUrl: "https://www.lodgecastiron.com/recipes",
     selectors: {
-      recipeLinks: "a[href*='recipe']",
+      recipeLinks: "a[href*='recipe'], a[href*='recipes'], .recipe-card a, [class*='recipe'] a",
       title: "h1",
-      description: "[class*='description']",
-      ingredients: "[class*='ingredients'] li",
-      instructions: "[class*='instructions'] li",
+      description: "[class*='description'], .recipe-summary, meta[name='description']",
+      ingredients: "[class*='ingredients'] li, .ingredient-list li",
+      instructions: "[class*='instructions'] li, [class*='steps'] li, .recipe-method li",
     } satisfies Selectors,
     enabled: true,
   },
