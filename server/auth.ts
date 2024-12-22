@@ -292,13 +292,33 @@ export function setupAuth(app: Express) {
     });
   });
 
-  app.get("/api/user", (req, res) => {
+  app.get("/api/user", async (req, res) => {
     if (!req.isAuthenticated()) {
       log("User check: Not authenticated", "auth");
       return res.status(401).json({ error: "Not authenticated" });
     }
 
-    log(`User check: ${req.user.username}`, "auth");
-    res.json(req.user);
+    try {
+      // Get user roles and their permissions
+      const userRoleRecords = await db
+        .select({
+          permissions: roles.permissions,
+        })
+        .from(userRoles)
+        .innerJoin(roles, eq(roles.id, userRoles.roleId))
+        .where(eq(userRoles.userId, req.user.id));
+
+      // Flatten all permissions from all roles
+      const permissions = userRoleRecords.flatMap(r => r.permissions);
+
+      log(`User check: ${req.user.username}`, "auth");
+      res.json({
+        ...req.user,
+        permissions,
+      });
+    } catch (error) {
+      log(`Error fetching user permissions: ${error}`, "auth");
+      res.status(500).json({ error: "Failed to fetch user permissions" });
+    }
   });
 }
