@@ -7,7 +7,7 @@ import { scrypt, randomBytes, timingSafeEqual } from "crypto";
 import { promisify } from "util";
 import { users, insertUserSchema, type SelectUser } from "@db/schema";
 import { db } from "@db";
-import { eq } from "drizzle-orm";
+import { eq, sql } from "drizzle-orm";
 import { log } from "./vite";
 
 const scryptAsync = promisify(scrypt);
@@ -169,12 +169,21 @@ export function setupAuth(app: Express) {
 
       // Hash password and create user
       const hashedPassword = await crypto.hash(password);
+
+      // Make the first registered user an admin
+      const [userCount] = await db
+        .select({ count: sql<number>`count(*)` })
+        .from(users);
+
+      const isFirstUser = userCount?.count === 0;
+      log(`Creating user ${username} with admin privileges: ${isFirstUser}`, "auth");
+
       const [newUser] = await db
         .insert(users)
         .values({
           username,
           password: hashedPassword,
-          isAdmin: false,
+          isAdmin: isFirstUser,
         })
         .returning();
 
