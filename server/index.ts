@@ -1,11 +1,15 @@
 import express, { type Request, Response, NextFunction } from "express";
 import { registerRoutes } from "./routes";
 import { setupVite, serveStatic, log } from "./vite";
+import { db } from "@db";
+import { users } from "@db/schema";
+import { setupAuth } from "./auth";
 
 const app = express();
 app.use(express.json());
 app.use(express.urlencoded({ extended: false }));
 
+// Request logging middleware
 app.use((req, res, next) => {
   const start = Date.now();
   const path = req.path;
@@ -29,37 +33,56 @@ app.use((req, res, next) => {
         logLine = logLine.slice(0, 79) + "…";
       }
 
-      log(logLine);
+      log(logLine, "express");
     }
   });
 
   next();
 });
 
+// Error handling middleware
+app.use((err: any, _req: Request, res: Response, _next: NextFunction) => {
+  const status = err.status || err.statusCode || 500;
+  const message = err.message || "Internal Server Error";
+  log(`Error: ${message}`, "express");
+  res.status(status).json({ message });
+});
+
 (async () => {
-  const server = registerRoutes(app);
+  try {
+    // Test database connection and initialize
+    log("Testing database connection...", "express");
+    await db.select().from(users).limit(1);
+    log("Database connection successful", "express");
 
-  app.use((err: any, _req: Request, res: Response, _next: NextFunction) => {
-    const status = err.status || err.statusCode || 500;
-    const message = err.message || "Internal Server Error";
+    // Setup authentication
+    log("Setting up authentication...", "express");
+    setupAuth(app);
+    log("Authentication setup complete", "express");
 
-    res.status(status).json({ message });
-    throw err;
-  });
+    // Register routes
+    log("Registering application routes...", "express");
+    const server = registerRoutes(app);
+    log("Routes registered successfully", "express");
 
-  // importantly only setup vite in development and after
-  // setting up all the other routes so the catch-all route
-  // doesn't interfere with the other routes
-  if (app.get("env") === "development") {
-    await setupVite(app, server);
-  } else {
-    serveStatic(app);
+    // Setup Vite or static serving
+    if (app.get("env") === "development") {
+      log("Setting up Vite development server...", "express");
+      await setupVite(app, server);
+      log("Vite setup complete", "express");
+    } else {
+      log("Setting up static file serving...", "express");
+      serveStatic(app);
+      log("Static serving setup complete", "express");
+    }
+
+    // Start the server
+    const PORT = 5000;
+    server.listen(PORT, "0.0.0.0", () => {
+      log(`Server running on port ${PORT}`, "express");
+    });
+  } catch (error) {
+    log(`Failed to start server: ${error}`, "express");
+    process.exit(1);
   }
-
-  // ALWAYS serve the app on port 5000
-  // this serves both the API and the client
-  const PORT = 5000;
-  server.listen(PORT, "0.0.0.0", () => {
-    log(`serving on port ${PORT}`);
-  });
 })();

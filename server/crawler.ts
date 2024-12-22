@@ -103,10 +103,10 @@ async function detectSelectors(url: string): Promise<Selectors> {
     };
 
     // Helper function to find first matching selector with content
-    const findFirstMatch = (selectors: string[], context: Document | Element = document): string => {
+    const findFirstMatch = (selectors: string[]): string => {
       for (const selector of selectors) {
         try {
-          const elements = context.querySelectorAll(selector);
+          const elements = document.querySelectorAll(selector);
           if (elements.length > 0 && Array.from(elements).some(el => el.textContent?.trim())) {
             log(`Found matching selector with content: ${selector}`, "crawler");
             return selector;
@@ -118,7 +118,6 @@ async function detectSelectors(url: string): Promise<Selectors> {
       return selectors[0]; // Fallback to first pattern if no match found
     };
 
-    // Find best matching selectors
     const detectedSelectors: Selectors = {
       recipeLinks: findFirstMatch(patterns.recipeLinks),
       title: findFirstMatch(patterns.title),
@@ -138,43 +137,37 @@ async function detectSelectors(url: string): Promise<Selectors> {
 }
 
 async function initializeCrawlerConfigs() {
-  for (const config of DEFAULT_CONFIGS) {
-    const [existing] = await db
-      .select()
-      .from(crawlerConfigs)
-      .where(eq(crawlerConfigs.siteName, config.siteName));
+  try {
+    log("Initializing default crawler configurations", "crawler");
+    for (const config of DEFAULT_CONFIGS) {
+      const [existing] = await db
+        .select()
+        .from(crawlerConfigs)
+        .where(eq(crawlerConfigs.siteName, config.siteName));
 
-    if (!existing) {
-      await db.insert(crawlerConfigs).values(config);
+      if (!existing) {
+        await db.insert(crawlerConfigs).values(config);
+        log(`Created default config for ${config.siteName}`, "crawler");
+      }
     }
+  } catch (error) {
+    log(`Error initializing crawler configs: ${error}`, "crawler");
+    throw error;
   }
 }
 
 async function normalizeUrl(url: string, baseUrl: string): Promise<string> {
   try {
-    // Handle relative URLs
-    if (url.startsWith('/')) {
-      const base = new URL(baseUrl);
-      return `${base.protocol}//${base.host}${url}`;
-    }
-    // Handle protocol-relative URLs
-    if (url.startsWith('//')) {
-      const base = new URL(baseUrl);
-      return `${base.protocol}${url}`;
-    }
-    // Handle already absolute URLs
-    if (url.startsWith('http')) {
-      return url;
-    }
-    // Handle relative URLs without leading slash
-    return new URL(url, baseUrl).toString();
+    const base = new URL(baseUrl);
+    const normalized = new URL(url, base);
+    return normalized.toString();
   } catch (error) {
     log(`Error normalizing URL ${url}: ${error}`, "crawler");
     throw error;
   }
 }
 
-export async function crawlRecipe(url: string, selectors: Selectors) {
+async function crawlRecipe(url: string, selectors: Selectors) {
   try {
     log(`Crawling recipe from ${url}`, "crawler");
     const response = await fetch(url, {
@@ -191,7 +184,6 @@ export async function crawlRecipe(url: string, selectors: Selectors) {
     const dom = new JSDOM(html);
     const document = dom.window.document;
 
-    // Try multiple selectors for each element
     const title = document.querySelector(selectors.title)?.textContent?.trim() ||
                  document.querySelector("h1")?.textContent?.trim();
 
@@ -216,7 +208,7 @@ export async function crawlRecipe(url: string, selectors: Selectors) {
       log(`Description: ${description ? "Found" : "Missing"}`, "crawler");
       log(`Ingredients: ${ingredients.length} found`, "crawler");
       log(`Instructions: ${instructions.length} found`, "crawler");
-      throw new Error("Failed to extract required recipe data");
+      return null;
     }
 
     return {
@@ -233,43 +225,45 @@ export async function crawlRecipe(url: string, selectors: Selectors) {
 }
 
 export async function runCrawler() {
-  await initializeCrawlerConfigs();
+  try {
+    await initializeCrawlerConfigs();
 
-  const configs = await db
-    .select()
-    .from(crawlerConfigs)
-    .where(eq(crawlerConfigs.enabled, true));
+    const configs = await db
+      .select()
+      .from(crawlerConfigs)
+      .where(eq(crawlerConfigs.enabled, true));
 
-  for (const config of configs) {
-    try {
-      log(`Starting crawl for ${config.siteName}`, "crawler");
+    for (const config of configs) {
+      try {
+        log(`Starting crawl for ${config.siteName}`, "crawler");
 
-      // If selectors are not defined, try to detect them
-      let selectorsToUse: Selectors;
-      if (!config.selectors || Object.keys(config.selectors).length === 0) {
-        log(`No selectors defined for ${config.siteName}, attempting to detect...`, "crawler");
-        selectorsToUse = await detectSelectors(config.siteUrl);
-      } else {
-        selectorsToUse = config.selectors as Selectors;
-      }
+        let selectorsToUse: Selectors;
+        if (!config.selectors || Object.keys(config.selectors).length === 0) {
+          log(`No selectors defined for ${config.siteName}, attempting to detect...`, "crawler");
+          selectorsToUse = await detectSelectors(config.siteUrl);
+        } else {
+          selectorsToUse = config.selectors as Selectors;
+        }
 
-      const response = await fetch(config.siteUrl, {
-        headers: {
-          "User-Agent": "Mozilla/5.0 (compatible; CastIronRecipeCrawler/1.0; +https://mycookwarecare.com)",
-        },
-      });
+        const response = await fetch(config.siteUrl, {
+          headers: {
+            "User-Agent": "Mozilla/5.0 (compatible; CastIronRecipeCrawler/1.0; +https://mycookwarecare.com)",
+          },
+        });
 
-      if (!response.ok) {
-        throw new Error(`Failed to fetch site: ${response.status} ${response.statusText}`);
-      }
+        if (!response.ok) {
+          throw new Error(`Failed to fetch site: ${response.status} ${response.statusText}`);
+        }
 
-      const html = await response.text();
-      const dom = new JSDOM(html);
-      const document = dom.window.document;
+        const html = await response.text();
+        const dom = new JSDOM(html);
+        const document = dom.window.document;
 
-      const recipeLinks = await Promise.all(
-        Array.from(document.querySelectorAll<HTMLAnchorElement>(selectorsToUse.recipeLinks))
-          .map(async (link) => {
+        const links = document.querySelectorAll<HTMLAnchorElement>(selectorsToUse.recipeLinks);
+        log(`Found ${links.length} potential recipe links`, "crawler");
+
+        const recipeLinks = await Promise.all(
+          Array.from(links).map(async (link) => {
             const href = link.href || link.getAttribute("href");
             if (!href) return null;
             try {
@@ -279,38 +273,44 @@ export async function runCrawler() {
               return null;
             }
           })
-      );
+        );
 
-      const validLinks = recipeLinks.filter((url): url is string => Boolean(url));
-      log(`Found ${validLinks.length} recipe links on ${config.siteName}`, "crawler");
+        const validLinks = recipeLinks.filter((url): url is string => Boolean(url));
+        log(`Found ${validLinks.length} valid recipe links on ${config.siteName}`, "crawler");
 
-      for (const link of validLinks) {
-        await delay(2000); // Ethical crawling delay
-        const recipeData = await crawlRecipe(link, selectorsToUse);
+        for (const link of validLinks) {
+          await delay(2000); // Ethical crawling delay
+          const recipeData = await crawlRecipe(link, selectorsToUse);
 
-        if (recipeData) {
-          await db.insert(recipes).values({
-            ...recipeData,
-            cookwareType: "skillet", // Default value
-            difficulty: "medium",
-            prepTime: 30,
-            cookTime: 30,
-            servings: 4,
-            sourceName: config.siteName,
-          });
-          log(`Successfully saved recipe: ${recipeData.title}`, "crawler");
+          if (recipeData) {
+            await db.insert(recipes).values({
+              ...recipeData,
+              cookwareType: "skillet", // Default value
+              difficulty: "medium",
+              prepTime: 30,
+              cookTime: 30,
+              servings: 4,
+              sourceName: config.siteName,
+            });
+            log(`Successfully saved recipe: ${recipeData.title}`, "crawler");
+          }
         }
+
+        await db
+          .update(crawlerConfigs)
+          .set({ lastCrawl: new Date() })
+          .where(eq(crawlerConfigs.id, config.id));
+
+        log(`Completed crawl for ${config.siteName}`, "crawler");
+      } catch (error) {
+        log(`Failed to crawl ${config.siteName}: ${error}`, "crawler");
+        // Continue with next config even if one fails
+        continue;
       }
-
-      await db
-        .update(crawlerConfigs)
-        .set({ lastCrawl: new Date() })
-        .where(eq(crawlerConfigs.id, config.id));
-
-      log(`Completed crawl for ${config.siteName}`, "crawler");
-    } catch (error) {
-      log(`Failed to crawl ${config.siteName}: ${error}`, "crawler");
     }
+  } catch (error) {
+    log(`Crawler execution failed: ${error}`, "crawler");
+    throw error;
   }
 }
 
@@ -349,9 +349,9 @@ export async function analyzeWebsite(url: string): Promise<{
     const document = dom.window.document;
 
     // Get sample data using detected selectors
-    const links = Array.from(document.querySelectorAll<HTMLAnchorElement>(selectors.recipeLinks));
+    const links = document.querySelectorAll<HTMLAnchorElement>(selectors.recipeLinks);
     const recipeLinks = await Promise.all(
-      links.map(async (link) => {
+      Array.from(links).map(async (link) => {
         const href = link.href || link.getAttribute("href");
         return href ? normalizeUrl(href, url) : null;
       })

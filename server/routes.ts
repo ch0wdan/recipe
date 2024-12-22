@@ -10,52 +10,43 @@ import cron from "node-cron";
 import { log } from "./vite";
 
 export function registerRoutes(app: Express): Server {
+  // Set up authentication routes
   setupAuth(app);
 
   // Recipe routes
   app.get("/api/recipes", async (req, res) => {
     const { cookware, difficulty } = req.query;
-    let baseQuery = db.select().from(recipes);
+    try {
+      const baseQuery = db.select().from(recipes);
 
-    if (cookware) {
-      baseQuery = baseQuery.where(eq(recipes.cookwareType, cookware as string));
+      const conditions = [];
+      if (cookware) {
+        conditions.push(eq(recipes.cookwareType, cookware as string));
+      }
+      if (difficulty) {
+        conditions.push(eq(recipes.difficulty, difficulty as string));
+      }
+
+      const result = conditions.length > 0
+        ? await baseQuery.where(and(...conditions)).orderBy(desc(recipes.createdAt))
+        : await baseQuery.orderBy(desc(recipes.createdAt));
+
+      res.json(result);
+    } catch (error) {
+      log(`Error fetching recipes: ${error}`, "express");
+      res.status(500).json({ error: "Failed to fetch recipes" });
     }
-    if (difficulty) {
-      baseQuery = baseQuery.where(eq(recipes.difficulty, difficulty as string));
-    }
-
-    const result = await baseQuery.orderBy(desc(recipes.createdAt));
-    res.json(result);
-  });
-
-  app.get("/api/recipes/:id", async (req, res) => {
-    const [recipe] = await db
-      .select()
-      .from(recipes)
-      .where(eq(recipes.id, parseInt(req.params.id)));
-
-    if (!recipe) {
-      return res.status(404).send("Recipe not found");
-    }
-
-    const recipeComments = await db
-      .select()
-      .from(comments)
-      .where(eq(comments.recipeId, recipe.id))
-      .orderBy(desc(comments.createdAt));
-
-    const recipeRatings = await db
-      .select()
-      .from(ratings)
-      .where(eq(ratings.recipeId, recipe.id));
-
-    res.json({ ...recipe, comments: recipeComments, ratings: recipeRatings });
   });
 
   // Admin routes
   app.get("/api/admin/roles", requirePermissions({ permissions: ["manage_roles"] }), async (req, res) => {
-    const allRoles = await db.select().from(roles);
-    res.json(allRoles);
+    try {
+      const allRoles = await db.select().from(roles);
+      res.json(allRoles);
+    } catch (error) {
+      log(`Error fetching roles: ${error}`, "express");
+      res.status(500).json({ error: "Failed to fetch roles" });
+    }
   });
 
   app.post("/api/admin/roles", requirePermissions({ permissions: ["manage_roles"] }), async (req, res) => {
@@ -120,12 +111,10 @@ export function registerRoutes(app: Express): Server {
 
   app.post("/api/admin/crawler/run", requirePermissions({ permissions: ["manage_crawler"] }), async (req, res) => {
     try {
-      runCrawler().catch(error => {
-        log(`Error running crawler: ${error}`, "express");
-      });
+      await runCrawler();
       res.json({ message: "Crawler started" });
     } catch (error) {
-      log(`Error initiating crawler: ${error}`, "express");
+      log(`Error running crawler: ${error}`, "express");
       res.status(500).json({ error: "Failed to start crawler" });
     }
   });
