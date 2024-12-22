@@ -12,6 +12,10 @@ export const selectorsSchema = z.object({
   description: z.string(),
   ingredients: z.string(),
   instructions: z.string(),
+  prepTime: z.string(),
+  cookTime: z.string(),
+  difficulty: z.string(),
+  servings: z.string(),
   image: z.string().optional(),
 });
 
@@ -28,6 +32,10 @@ export const DEFAULT_CONFIGS = [
       description: ".recipe-description, meta[name='description']",
       ingredients: ".ingredients-list li, .recipe-ingredients li",
       instructions: ".instructions-list li, .recipe-steps li",
+      prepTime: ".recipe-time .prep-time, [itemprop='prepTime'], .prep-time",
+      cookTime: ".recipe-time .cook-time, [itemprop='cookTime'], .cook-time",
+      difficulty: ".recipe-difficulty, .difficulty-level, .skill-level",
+      servings: ".recipe-servings, [itemprop='recipeYield'], .servings",
       image: ".recipe-image img, meta[property='og:image']"
     },
     enabled: true,
@@ -153,101 +161,85 @@ async function crawlRecipe(url: string, selectors: Selectors): Promise<any> {
     log(`Page HTML structure:`, "crawler");
     log(document.documentElement.outerHTML.slice(0, 1000), "crawler");
 
-    // Try multiple selectors for title
-    const titleSelectors = [selectors.title, "h1.recipe-title", "h1.entry-title", "h1"];
-    let title: string | undefined;
-    for (const selector of titleSelectors) {
-      title = document.querySelector(selector)?.textContent?.trim();
-      if (title) {
-        log(`Found title using selector ${selector}: ${title}`, "crawler");
-        break;
-      }
-    }
+    // Extract basic recipe information (title, description, etc.)
+    const title = document.querySelector(selectors.title)?.textContent?.trim();
+    log(`Found title: ${title}`, "crawler");
 
-    // Try multiple selectors for description
-    const descriptionSelectors = [
-      selectors.description,
-      "meta[name='description']",
-      ".recipe-description",
-      ".recipe-summary"
-    ];
-    let description: string | undefined;
-    for (const selector of descriptionSelectors) {
-      const element = document.querySelector(selector);
-      description = element?.getAttribute('content') || element?.textContent?.trim();
-      if (description) {
-        log(`Found description using selector ${selector}: ${description}`, "crawler");
-        break;
-      }
-    }
+    const description = document.querySelector(selectors.description)?.textContent?.trim() ||
+                       document.querySelector("meta[name='description']")?.getAttribute("content")?.trim();
+    log(`Found description: ${description}`, "crawler");
 
-    // Try multiple selectors for ingredients
-    const ingredientSelectors = [
-      selectors.ingredients,
-      ".recipe-ingredients li",
-      ".ingredients-list li",
-      "[itemprop='recipeIngredient']"
-    ];
-    let ingredients: string[] = [];
-    for (const selector of ingredientSelectors) {
-      const elements = document.querySelectorAll(selector);
-      if (elements.length > 0) {
-        ingredients = Array.from(elements)
-          .map(el => el.textContent?.trim())
-          .filter((text): text is string => !!text && text.length > 1);
-        if (ingredients.length > 0) {
-          log(`Found ${ingredients.length} ingredients using selector ${selector}`, "crawler");
-          break;
+    // Extract prep time
+    let prepTime = 0;
+    const prepTimeElement = document.querySelector(selectors.prepTime);
+    if (prepTimeElement) {
+      const prepTimeText = prepTimeElement.textContent?.trim();
+      if (prepTimeText) {
+        const minutes = parseTimeToMinutes(prepTimeText);
+        if (minutes > 0) {
+          prepTime = minutes;
+          log(`Found prep time: ${prepTime} minutes`, "crawler");
         }
       }
     }
 
-    // Try multiple selectors for instructions
-    const instructionSelectors = [
-      selectors.instructions,
-      ".recipe-instructions li",
-      ".recipe-steps li",
-      "[itemprop='recipeInstructions'] li"
-    ];
-    let instructions: string[] = [];
-    for (const selector of instructionSelectors) {
-      const elements = document.querySelectorAll(selector);
-      if (elements.length > 0) {
-        instructions = Array.from(elements)
-          .map(el => el.textContent?.trim())
-          .filter((text): text is string => !!text && text.length > 5);
-        if (instructions.length > 0) {
-          log(`Found ${instructions.length} instructions using selector ${selector}`, "crawler");
-          break;
+    // Extract cook time
+    let cookTime = 0;
+    const cookTimeElement = document.querySelector(selectors.cookTime);
+    if (cookTimeElement) {
+      const cookTimeText = cookTimeElement.textContent?.trim();
+      if (cookTimeText) {
+        const minutes = parseTimeToMinutes(cookTimeText);
+        if (minutes > 0) {
+          cookTime = minutes;
+          log(`Found cook time: ${cookTime} minutes`, "crawler");
         }
       }
     }
 
-    // Try to find image URL
-    const imageSelectors = [
-      "meta[property='og:image']",
-      "meta[name='og:image']",
-      ".recipe-image img",
-      ".hero-image img",
-      "img[itemprop='image']"
-    ];
-    let imageUrl: string | null = null;
-    for (const selector of imageSelectors) {
-      const element = document.querySelector(selector);
-      if (!element) continue;
+    // Extract difficulty
+    let difficulty = "medium"; // Default value
+    const difficultyElement = document.querySelector(selectors.difficulty);
+    if (difficultyElement) {
+      const difficultyText = difficultyElement.textContent?.trim().toLowerCase();
+      if (difficultyText) {
+        if (difficultyText.includes("easy") || difficultyText.includes("beginner")) {
+          difficulty = "easy";
+        } else if (difficultyText.includes("hard") || difficultyText.includes("advanced")) {
+          difficulty = "hard";
+        }
+        log(`Found difficulty: ${difficulty}`, "crawler");
+      }
+    }
 
-      const url = element.tagName.toLowerCase() === 'meta'
-        ? element.getAttribute('content')
-        : element.getAttribute('src') || element.getAttribute('data-src');
-
-      if (url) {
-        imageUrl = await normalizeUrl(url, url);
-        if (imageUrl) {
-          log(`Found image URL using selector ${selector}: ${imageUrl}`, "crawler");
-          break;
+    // Extract servings
+    let servings = 4; // Default value
+    const servingsElement = document.querySelector(selectors.servings);
+    if (servingsElement) {
+      const servingsText = servingsElement.textContent?.trim();
+      if (servingsText) {
+        const servingsMatch = servingsText.match(/\d+/);
+        if (servingsMatch) {
+          servings = parseInt(servingsMatch[0]);
+          log(`Found servings: ${servings}`, "crawler");
         }
       }
     }
+
+    // Extract ingredients and instructions
+    const ingredients = Array.from(document.querySelectorAll(selectors.ingredients))
+      .map(el => el.textContent?.trim())
+      .filter((text): text is string => !!text && text.length > 1);
+    log(`Found ${ingredients.length} ingredients`, "crawler");
+
+    const instructions = Array.from(document.querySelectorAll(selectors.instructions))
+      .map(el => el.textContent?.trim())
+      .filter((text): text is string => !!text && text.length > 5);
+    log(`Found ${instructions.length} instructions`, "crawler");
+
+    // Extract image URL
+    const imageUrl = await findImageUrl(document, url);
+    log(`Found image URL: ${imageUrl}`, "crawler");
 
     if (!title || !description || ingredients.length === 0 || instructions.length === 0) {
       log(`Failed to extract required recipe data from ${url}`, "crawler");
@@ -263,6 +255,10 @@ async function crawlRecipe(url: string, selectors: Selectors): Promise<any> {
       description,
       ingredients,
       instructions,
+      prepTime,
+      cookTime,
+      difficulty,
+      servings,
       sourceUrl: url,
       imageUrl,
     };
@@ -270,6 +266,57 @@ async function crawlRecipe(url: string, selectors: Selectors): Promise<any> {
     log(`Failed to crawl recipe from ${url}: ${error}`, "crawler");
     return null;
   }
+}
+
+// Helper function to parse time strings to minutes
+function parseTimeToMinutes(timeStr: string): number {
+  try {
+    const hours = timeStr.match(/(\d+)\s*h(our)?s?/i);
+    const minutes = timeStr.match(/(\d+)\s*m(in(ute)?)?s?/i);
+
+    let totalMinutes = 0;
+    if (hours) totalMinutes += parseInt(hours[1]) * 60;
+    if (minutes) totalMinutes += parseInt(minutes[1]);
+
+    // If no pattern matched but there's a number, assume it's minutes
+    if (!hours && !minutes) {
+      const justNumber = timeStr.match(/\d+/);
+      if (justNumber) totalMinutes = parseInt(justNumber[0]);
+    }
+
+    return totalMinutes;
+  } catch (error) {
+    log(`Error parsing time string "${timeStr}": ${error}`, "crawler");
+    return 0;
+  }
+}
+
+async function findImageUrl(document: Document, url: string):Promise<string | null> {
+    const imageSelectors = [
+      "meta[property='og:image']",
+      "meta[name='og:image']",
+      ".recipe-image img",
+      ".hero-image img",
+      "img[itemprop='image']"
+    ];
+    let imageUrl: string | null = null;
+    for (const selector of imageSelectors) {
+      const element = document.querySelector(selector);
+      if (!element) continue;
+
+      const urlCandidate = element.tagName.toLowerCase() === 'meta'
+        ? element.getAttribute('content')
+        : element.getAttribute('src') || element.getAttribute('data-src');
+
+      if (urlCandidate) {
+        imageUrl = await normalizeUrl(urlCandidate, url);
+        if (imageUrl) {
+          log(`Found image URL using selector ${selector}: ${imageUrl}`, "crawler");
+          break;
+        }
+      }
+    }
+    return imageUrl;
 }
 
 export async function runCrawler() {
@@ -316,10 +363,6 @@ export async function runCrawler() {
                 await db.insert(recipes).values({
                   ...recipeData,
                   cookwareType: "skillet",
-                  difficulty: "medium",
-                  prepTime: 30,
-                  cookTime: 30,
-                  servings: 4,
                   sourceName: config.siteName,
                 });
                 log(`Successfully saved recipe: ${recipeData.title}`, "crawler");
@@ -387,7 +430,11 @@ export async function analyzeWebsite(url: string) {
       description: ".recipe-description, .recipe-summary, meta[name='description']",
       ingredients: ".ingredients-list li, .recipe-ingredients li",
       instructions: ".instructions-list li, .recipe-directions li",
-      image: ".recipe-image img, .hero-image img, img[class*='recipe'], [itemprop='image'], meta[property='og:image']"
+      image: ".recipe-image img, .hero-image img, img[class*='recipe'], [itemprop='image'], meta[property='og:image']",
+      prepTime: ".recipe-prep-time, [itemprop='prepTime'], .prep-time",
+      cookTime: ".recipe-cook-time, [itemprop='cookTime'], .cook-time",
+      difficulty: ".recipe-difficulty, .difficulty-level, .skill-level",
+      servings: ".recipe-servings, [itemprop='recipeYield'], .servings",
     };
 
     // Extract domain name for site name
@@ -400,7 +447,7 @@ export async function analyzeWebsite(url: string) {
     const recipeLinks = await findRecipeLinks(document, selectors.recipeLinks, url);
     let sampleRecipe = null;
     if (recipeLinks.length > 0) {
-      sampleRecipe = await crawlRecipe(recipeLinks[0], selectors);
+      sampleRecipe = await crawlRecipe(recipeLinks[0], selectors as Selectors);
     }
 
     return {
