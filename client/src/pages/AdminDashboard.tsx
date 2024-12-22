@@ -24,9 +24,13 @@ import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
 import { useToast } from "@/hooks/use-toast";
-import { Play, Shield } from "lucide-react";
+import { Play, Shield, Plus } from "lucide-react";
 import { useState } from "react";
 import { useUser } from "@/hooks/use-user";
+import { useForm } from "react-hook-form";
+import { Form } from "@/components/ui/form";
+import { Textarea } from "@/components/ui/textarea";
+import { Switch } from "@/components/ui/switch";
 
 interface Role {
   id: number;
@@ -40,6 +44,26 @@ interface CrawlerConfig {
   siteUrl: string;
   enabled: boolean;
   lastCrawl: string | null;
+  selectors: {
+    recipeLinks: string;
+    title: string;
+    description: string;
+    ingredients: string;
+    instructions: string;
+  };
+}
+
+interface NewCrawlerConfig {
+  siteName: string;
+  siteUrl: string;
+  enabled: boolean;
+  selectors: {
+    recipeLinks: string;
+    title: string;
+    description: string;
+    ingredients: string;
+    instructions: string;
+  };
 }
 
 export function AdminDashboard() {
@@ -47,6 +71,20 @@ export function AdminDashboard() {
   const { hasPermission } = useUser();
   const [newRoleName, setNewRoleName] = useState("");
   const [selectedPermissions, setSelectedPermissions] = useState<string[]>([]);
+  const crawlerForm = useForm<NewCrawlerConfig>({
+    defaultValues: {
+      siteName: "",
+      siteUrl: "",
+      enabled: true,
+      selectors: {
+        recipeLinks: "",
+        title: "",
+        description: "",
+        ingredients: "",
+        instructions: "",
+      },
+    },
+  });
 
   // Check if user has permission to manage roles
   const canManageRoles = hasPermission("manage_roles");
@@ -82,6 +120,24 @@ export function AdminDashboard() {
       setNewRoleName("");
       setSelectedPermissions([]);
       refetchRoles();
+    },
+  });
+
+  const createCrawlerMutation = useMutation({
+    mutationFn: async (data: NewCrawlerConfig) => {
+      const response = await fetch("/api/admin/crawler", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify(data),
+        credentials: "include",
+      });
+      if (!response.ok) throw new Error(await response.text());
+      return response.json();
+    },
+    onSuccess: () => {
+      toast({ title: "Crawler configuration added successfully" });
+      crawlerForm.reset();
+      refetchCrawler();
     },
   });
 
@@ -236,10 +292,115 @@ export function AdminDashboard() {
           <TabsContent value="crawler">
             <div className="flex justify-between items-center mb-8">
               <h2 className="text-3xl font-bold">Crawler Management</h2>
-              <Button onClick={() => runCrawlerMutation.mutate()}>
-                <Play className="h-4 w-4 mr-2" />
-                Run Crawler
-              </Button>
+              <div className="flex gap-2">
+                <Dialog>
+                  <DialogTrigger asChild>
+                    <Button variant="outline">
+                      <Plus className="h-4 w-4 mr-2" />
+                      Add Website
+                    </Button>
+                  </DialogTrigger>
+                  <DialogContent className="max-w-2xl">
+                    <DialogHeader>
+                      <DialogTitle>Add New Recipe Website</DialogTitle>
+                    </DialogHeader>
+                    <Form {...crawlerForm}>
+                      <form
+                        onSubmit={crawlerForm.handleSubmit((data) =>
+                          createCrawlerMutation.mutate(data)
+                        )}
+                        className="space-y-4"
+                      >
+                        <div className="grid grid-cols-2 gap-4">
+                          <div className="space-y-2">
+                            <label className="text-sm font-medium">Site Name</label>
+                            <Input
+                              {...crawlerForm.register("siteName")}
+                              placeholder="e.g. Lodge Cast Iron"
+                            />
+                          </div>
+                          <div className="space-y-2">
+                            <label className="text-sm font-medium">Site URL</label>
+                            <Input
+                              {...crawlerForm.register("siteUrl")}
+                              placeholder="https://example.com/recipes"
+                            />
+                          </div>
+                        </div>
+
+                        <div className="space-y-2">
+                          <h3 className="text-sm font-medium">CSS Selectors</h3>
+                          <p className="text-sm text-muted-foreground">
+                            Enter CSS selectors to identify recipe elements on the page
+                          </p>
+
+                          <div className="grid gap-4">
+                            <div className="space-y-2">
+                              <label className="text-sm font-medium">Recipe Links</label>
+                              <Input
+                                {...crawlerForm.register("selectors.recipeLinks")}
+                                placeholder=".recipe-card a"
+                              />
+                              <p className="text-xs text-muted-foreground">
+                                Selector for links to individual recipe pages
+                              </p>
+                            </div>
+
+                            <div className="space-y-2">
+                              <label className="text-sm font-medium">Recipe Title</label>
+                              <Input
+                                {...crawlerForm.register("selectors.title")}
+                                placeholder=".recipe-title"
+                              />
+                            </div>
+
+                            <div className="space-y-2">
+                              <label className="text-sm font-medium">Description</label>
+                              <Input
+                                {...crawlerForm.register("selectors.description")}
+                                placeholder=".recipe-description"
+                              />
+                            </div>
+
+                            <div className="space-y-2">
+                              <label className="text-sm font-medium">Ingredients</label>
+                              <Input
+                                {...crawlerForm.register("selectors.ingredients")}
+                                placeholder=".ingredients-list li"
+                              />
+                            </div>
+
+                            <div className="space-y-2">
+                              <label className="text-sm font-medium">Instructions</label>
+                              <Input
+                                {...crawlerForm.register("selectors.instructions")}
+                                placeholder=".instructions-list li"
+                              />
+                            </div>
+                          </div>
+                        </div>
+
+                        <div className="flex items-center space-x-2">
+                          <Switch
+                            {...crawlerForm.register("enabled")}
+                            defaultChecked={true}
+                          />
+                          <label className="text-sm font-medium">Enable Crawler</label>
+                        </div>
+
+                        <Button type="submit" className="w-full">
+                          Add Website
+                        </Button>
+                      </form>
+                    </Form>
+                  </DialogContent>
+                </Dialog>
+
+                <Button onClick={() => runCrawlerMutation.mutate()}>
+                  <Play className="h-4 w-4 mr-2" />
+                  Run Crawler
+                </Button>
+              </div>
             </div>
 
             <Card>

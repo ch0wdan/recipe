@@ -6,7 +6,7 @@ import { eq } from "drizzle-orm";
 const DEFAULT_CONFIGS = [
   {
     siteName: "Lodge Cast Iron",
-    siteUrl: "https://www.lodgecastiron.com/recipes",
+    siteUrl: "https://www.lodgecastiron.com/discover/recipes",
     selectors: {
       recipeLinks: ".recipe-card a",
       title: "h1.recipe-title",
@@ -18,7 +18,7 @@ const DEFAULT_CONFIGS = [
   },
   {
     siteName: "Field Company",
-    siteUrl: "https://fieldcompany.com/pages/recipes",
+    siteUrl: "https://fieldcompany.com/blogs/journal/tagged/holiday",
     selectors: {
       recipeLinks: ".recipe-preview a",
       title: ".recipe-title",
@@ -31,7 +31,7 @@ const DEFAULT_CONFIGS = [
   // Add more sites as needed
 ];
 
-const delay = (ms: number) => new Promise(resolve => setTimeout(resolve, ms));
+const delay = (ms: number) => new Promise((resolve) => setTimeout(resolve, ms));
 
 async function initializeCrawlerConfigs() {
   for (const config of DEFAULT_CONFIGS) {
@@ -59,12 +59,15 @@ export async function crawlRecipe(url: string, selectors: Selectors) {
     console.log(`Crawling recipe from ${url}`);
     const response = await fetch(url, {
       headers: {
-        'User-Agent': 'Mozilla/5.0 (compatible; CastIronRecipeCrawler/1.0; +https://mycookwarecare.com)'
-      }
+        "User-Agent":
+          "Mozilla/5.0 (compatible; CastIronRecipeCrawler/1.0; +https://mycookwarecare.com)",
+      },
     });
 
     if (!response.ok) {
-      throw new Error(`Failed to fetch URL: ${response.status} ${response.statusText}`);
+      throw new Error(
+        `Failed to fetch URL: ${response.status} ${response.statusText}`,
+      );
     }
 
     const html = await response.text();
@@ -72,15 +75,26 @@ export async function crawlRecipe(url: string, selectors: Selectors) {
     const document = dom.window.document;
 
     const title = document.querySelector(selectors.title)?.textContent?.trim();
-    const description = document.querySelector(selectors.description)?.textContent?.trim();
-    const ingredients = Array.from(document.querySelectorAll<HTMLElement>(selectors.ingredients))
-      .map(el => el.textContent?.trim())
+    const description = document
+      .querySelector(selectors.description)
+      ?.textContent?.trim();
+    const ingredients = Array.from(
+      document.querySelectorAll<HTMLElement>(selectors.ingredients),
+    )
+      .map((el) => el.textContent?.trim())
       .filter((text): text is string => Boolean(text));
-    const instructions = Array.from(document.querySelectorAll<HTMLElement>(selectors.instructions))
-      .map(el => el.textContent?.trim())
+    const instructions = Array.from(
+      document.querySelectorAll<HTMLElement>(selectors.instructions),
+    )
+      .map((el) => el.textContent?.trim())
       .filter((text): text is string => Boolean(text));
 
-    if (!title || !description || ingredients.length === 0 || instructions.length === 0) {
+    if (
+      !title ||
+      !description ||
+      ingredients.length === 0 ||
+      instructions.length === 0
+    ) {
       throw new Error("Failed to extract required recipe data");
     }
 
@@ -99,26 +113,36 @@ export async function crawlRecipe(url: string, selectors: Selectors) {
 
 export async function runCrawler() {
   await initializeCrawlerConfigs();
-  const configs = await db.select().from(crawlerConfigs).where(eq(crawlerConfigs.enabled, true));
+  const configs = await db
+    .select()
+    .from(crawlerConfigs)
+    .where(eq(crawlerConfigs.enabled, true));
 
   for (const config of configs) {
     try {
       console.log(`Starting crawl for ${config.siteName}`);
       const response = await fetch(config.siteUrl, {
         headers: {
-          'User-Agent': 'Mozilla/5.0 (compatible; CastIronRecipeCrawler/1.0; +https://mycookwarecare.com)'
-        }
+          "User-Agent":
+            "Mozilla/5.0 (compatible; CastIronRecipeCrawler/1.0; +https://mycookwarecare.com)",
+        },
       });
 
       if (!response.ok) {
-        throw new Error(`Failed to fetch site: ${response.status} ${response.statusText}`);
+        throw new Error(
+          `Failed to fetch site: ${response.status} ${response.statusText}`,
+        );
       }
 
       const html = await response.text();
       const dom = new JSDOM(html);
       const document = dom.window.document;
 
-      const recipeLinks = Array.from(document.querySelectorAll<HTMLAnchorElement>(config.selectors.recipeLinks))
+      const recipeLinks = Array.from(
+        document.querySelectorAll<HTMLAnchorElement>(
+          config.selectors.recipeLinks,
+        ),
+      )
         .map((link) => {
           const href = link.href;
           if (!href) return null;
@@ -131,17 +155,22 @@ export async function runCrawler() {
         })
         .filter((url): url is string => Boolean(url));
 
-      console.log(`Found ${recipeLinks.length} recipe links on ${config.siteName}`);
+      console.log(
+        `Found ${recipeLinks.length} recipe links on ${config.siteName}`,
+      );
 
       for (const link of recipeLinks) {
         await delay(2000); // Ethical crawling delay
-        const recipeData = await crawlRecipe(link, config.selectors as Selectors);
+        const recipeData = await crawlRecipe(
+          link,
+          config.selectors as Selectors,
+        );
 
         if (recipeData) {
           await db.insert(recipes).values({
             ...recipeData,
-            cookwareType: 'skillet', // Default value
-            difficulty: 'medium',
+            cookwareType: "skillet", // Default value
+            difficulty: "medium",
             prepTime: 30,
             cookTime: 30,
             servings: 4,
