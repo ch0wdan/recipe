@@ -61,6 +61,7 @@ declare global {
 
 async function setupDefaultRoles() {
   try {
+    log("Setting up default roles", "auth");
     const [existingAdminRole] = await db
       .select()
       .from(roles)
@@ -68,6 +69,7 @@ async function setupDefaultRoles() {
       .limit(1);
 
     if (!existingAdminRole) {
+      log("Creating admin role", "auth");
       await db.insert(roles).values({
         name: "admin",
         permissions: [
@@ -88,6 +90,7 @@ async function setupDefaultRoles() {
       .limit(1);
 
     if (!existingModRole) {
+      log("Creating moderator role", "auth");
       await db.insert(roles).values({
         name: "moderator",
         permissions: [
@@ -109,7 +112,10 @@ export function setupAuth(app: Express) {
     secret: process.env.REPL_ID || "secure-session-secret",
     resave: false,
     saveUninitialized: false,
-    cookie: {},
+    cookie: {
+      maxAge: 24 * 60 * 60 * 1000, // 24 hours
+      httpOnly: true,
+    },
     store: new MemoryStore({
       checkPeriod: 86400000, // prune expired entries every 24h
     }),
@@ -118,10 +124,12 @@ export function setupAuth(app: Express) {
   if (app.get("env") === "production") {
     app.set("trust proxy", 1);
     sessionSettings.cookie = {
+      ...sessionSettings.cookie,
       secure: true,
     };
   }
 
+  log("Setting up session middleware", "auth");
   app.use(session(sessionSettings));
   app.use(passport.initialize());
   app.use(passport.session());
@@ -240,6 +248,7 @@ export function setupAuth(app: Express) {
             userId: newUser.id,
             roleId: adminRole.id,
           });
+          log(`Assigned admin role to first user: ${username}`, "auth");
         }
       }
 
@@ -311,7 +320,7 @@ export function setupAuth(app: Express) {
       // Flatten all permissions from all roles
       const permissions = userRoleRecords.flatMap(r => r.permissions);
 
-      log(`User check: ${req.user.username}`, "auth");
+      log(`User check: ${req.user.username} with permissions: ${permissions.join(", ")}`, "auth");
       res.json({
         ...req.user,
         permissions,
