@@ -9,10 +9,10 @@ import { users, insertUserSchema, type SelectUser } from "@db/schema";
 import { db } from "@db";
 import { eq, sql } from "drizzle-orm";
 import { log } from "./vite";
+import { roles, userRoles } from "@db/schema";
 
 const scryptAsync = promisify(scrypt);
 
-// Improved crypto utilities with better error handling and logging
 const crypto = {
   hash: async (password: string): Promise<string> => {
     try {
@@ -53,14 +53,57 @@ const crypto = {
   }
 };
 
-// extend express user object with our schema
 declare global {
   namespace Express {
     interface User extends SelectUser {}
   }
 }
 
+async function setupDefaultRoles() {
+  try {
+    const [existingAdminRole] = await db
+      .select()
+      .from(roles)
+      .where(eq(roles.name, "admin"))
+      .limit(1);
+
+    if (!existingAdminRole) {
+      await db.insert(roles).values({
+        name: "admin",
+        permissions: [
+          "manage_users",
+          "manage_roles",
+          "manage_crawler",
+          "view_admin_dashboard",
+          "moderate_comments",
+          "moderate_recipes"
+        ],
+      });
+    }
+
+    const [existingModRole] = await db
+      .select()
+      .from(roles)
+      .where(eq(roles.name, "moderator"))
+      .limit(1);
+
+    if (!existingModRole) {
+      await db.insert(roles).values({
+        name: "moderator",
+        permissions: [
+          "moderate_comments",
+          "moderate_recipes",
+          "view_admin_dashboard"
+        ],
+      });
+    }
+  } catch (error) {
+    log(`Error setting up default roles: ${error}`, "auth");
+  }
+}
+
 export function setupAuth(app: Express) {
+  setupDefaultRoles().catch(console.error);
   const MemoryStore = createMemoryStore(session);
   const sessionSettings: session.SessionOptions = {
     secret: process.env.REPL_ID || "secure-session-secret",
@@ -141,21 +184,19 @@ export function setupAuth(app: Express) {
     }
   });
 
-  // Registration endpoint
   app.post("/api/register", async (req, res, next) => {
     try {
       log(`Registration attempt: ${req.body.username}`, "auth");
 
       const parseResult = insertUserSchema.safeParse(req.body);
       if (!parseResult.success) {
-        const errors = parseResult.error.errors.map(e => e.message).join(", ");
+        const errors = parseResult.error.errors.map((e) => e.message).join(", ");
         log(`Registration validation failed: ${errors}`, "auth");
         return res.status(400).json({ error: errors });
       }
 
       const { username, password } = parseResult.data;
 
-      // Check for existing user
       const [existingUser] = await db
         .select()
         .from(users)
@@ -167,10 +208,8 @@ export function setupAuth(app: Express) {
         return res.status(400).json({ error: "Username already exists" });
       }
 
-      // Hash password and create user
       const hashedPassword = await crypto.hash(password);
 
-      // Make the first registered user an admin
       const [userCount] = await db
         .select({ count: sql<number>`count(*)` })
         .from(users);
@@ -189,7 +228,21 @@ export function setupAuth(app: Express) {
 
       log(`User registered successfully: ${username}`, "auth");
 
-      // Log the user in
+      if (isFirstUser) {
+        const [adminRole] = await db
+          .select()
+          .from(roles)
+          .where(eq(roles.name, "admin"))
+          .limit(1);
+
+        if (adminRole) {
+          await db.insert(userRoles).values({
+            userId: newUser.id,
+            roleId: adminRole.id,
+          });
+        }
+      }
+
       req.login(newUser, (err) => {
         if (err) {
           log(`Auto-login failed after registration: ${err}`, "auth");
@@ -203,7 +256,6 @@ export function setupAuth(app: Express) {
     }
   });
 
-  // Login endpoint
   app.post("/api/login", (req, res, next) => {
     passport.authenticate("local", (err: Error, user: Express.User | false, info: IVerifyOptions) => {
       if (err) {
@@ -228,7 +280,6 @@ export function setupAuth(app: Express) {
     })(req, res, next);
   });
 
-  // Logout endpoint
   app.post("/api/logout", (req, res) => {
     const username = req.user?.username;
     req.logout((err) => {
@@ -241,7 +292,6 @@ export function setupAuth(app: Express) {
     });
   });
 
-  // Current user endpoint
   app.get("/api/user", (req, res) => {
     if (!req.isAuthenticated()) {
       log("User check: Not authenticated", "auth");

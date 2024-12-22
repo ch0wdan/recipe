@@ -2,6 +2,20 @@ import { pgTable, text, serial, integer, boolean, timestamp, jsonb } from "drizz
 import { createInsertSchema, createSelectSchema } from "drizzle-zod";
 import { relations } from "drizzle-orm";
 
+export const roles = pgTable("roles", {
+  id: serial("id").primaryKey(),
+  name: text("name").unique().notNull(),
+  permissions: text("permissions").array().notNull(),
+  createdAt: timestamp("created_at").defaultNow(),
+});
+
+export const userRoles = pgTable("user_roles", {
+  id: serial("id").primaryKey(),
+  userId: integer("user_id").references(() => users.id).notNull(),
+  roleId: integer("role_id").references(() => roles.id).notNull(),
+  createdAt: timestamp("created_at").defaultNow(),
+});
+
 export const users = pgTable("users", {
   id: serial("id").primaryKey(),
   username: text("username").unique().notNull(),
@@ -53,6 +67,26 @@ export const crawlerConfigs = pgTable("crawler_configs", {
   lastCrawl: timestamp("last_crawl"),
 });
 
+// Relations
+export const userRelations = relations(users, ({ many }) => ({
+  roles: many(userRoles),
+}));
+
+export const roleRelations = relations(roles, ({ many }) => ({
+  users: many(userRoles),
+}));
+
+export const userRoleRelations = relations(userRoles, ({ one }) => ({
+  user: one(users, {
+    fields: [userRoles.userId],
+    references: [users.id],
+  }),
+  role: one(roles, {
+    fields: [userRoles.roleId],
+    references: [roles.id],
+  }),
+}));
+
 export const recipeRelations = relations(recipes, ({ one, many }) => ({
   user: one(users, {
     fields: [recipes.userId],
@@ -84,13 +118,19 @@ export const ratingRelations = relations(ratings, ({ one }) => ({
   }),
 }));
 
+// Types
 export type Recipe = typeof recipes.$inferSelect;
 export type InsertRecipe = typeof recipes.$inferInsert;
 export type Comment = typeof comments.$inferSelect;
 export type Rating = typeof ratings.$inferSelect;
 export type CrawlerConfig = typeof crawlerConfigs.$inferSelect;
+export type Role = typeof roles.$inferSelect;
+export type UserRole = typeof userRoles.$inferSelect;
 
+// Schemas
 export const insertUserSchema = createInsertSchema(users);
 export const selectUserSchema = createSelectSchema(users);
+export const insertRoleSchema = createInsertSchema(roles);
+export const selectRoleSchema = createSelectSchema(roles);
 export type InsertUser = typeof users.$inferInsert;
 export type SelectUser = typeof users.$inferSelect;
