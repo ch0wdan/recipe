@@ -13,19 +13,36 @@ import { log } from "./vite";
 const scryptAsync = promisify(scrypt);
 const crypto = {
   hash: async (password: string) => {
-    const salt = randomBytes(16).toString("hex");
-    const buf = (await scryptAsync(password, salt, 64)) as Buffer;
-    return `${buf.toString("hex")}.${salt}`;
+    try {
+      log(`Hashing password...`, "auth");
+      const salt = randomBytes(16).toString("hex");
+      const buf = (await scryptAsync(password, salt, 64)) as Buffer;
+      const hashedPassword = `${buf.toString("hex")}.${salt}`;
+      log(`Password hashed successfully`, "auth");
+      return hashedPassword;
+    } catch (error) {
+      log(`Error hashing password: ${error}`, "auth");
+      throw error;
+    }
   },
   compare: async (suppliedPassword: string, storedPassword: string) => {
-    const [hashedPassword, salt] = storedPassword.split(".");
-    const hashedPasswordBuf = Buffer.from(hashedPassword, "hex");
-    const suppliedPasswordBuf = (await scryptAsync(
-      suppliedPassword,
-      salt,
-      64
-    )) as Buffer;
-    return timingSafeEqual(hashedPasswordBuf, suppliedPasswordBuf);
+    try {
+      log(`Comparing passwords...`, "auth");
+      const [hashedPassword, salt] = storedPassword.split(".");
+      log(`Stored hash: ${hashedPassword.slice(0, 10)}...`, "auth");
+      const hashedPasswordBuf = Buffer.from(hashedPassword, "hex");
+      const suppliedPasswordBuf = (await scryptAsync(
+        suppliedPassword,
+        salt,
+        64
+      )) as Buffer;
+      const match = timingSafeEqual(hashedPasswordBuf, suppliedPasswordBuf);
+      log(`Password comparison result: ${match}`, "auth");
+      return match;
+    } catch (error) {
+      log(`Error comparing passwords: ${error}`, "auth");
+      throw error;
+    }
   },
 };
 
