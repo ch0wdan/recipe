@@ -59,15 +59,38 @@ export function CrawlerAnalyzer() {
               <head>
                 <base href="${data.url}">
                 <style>
+                  /* Reset outline styles */
+                  * { outline: none !important; }
+
                   /* Highlight selectable elements */
+                  *[data-recipe-element] {
+                    transition: outline 0.2s ease-in-out;
+                  }
+
                   *[data-recipe-element]:hover {
-                    outline: 2px solid #3b82f6 !important;
+                    outline: 2px dashed #3b82f6 !important;
                     cursor: pointer !important;
+                    position: relative;
                   }
 
                   /* Style for selected elements */
                   *[data-selected="true"] {
                     outline: 2px solid #22c55e !important;
+                    position: relative;
+                  }
+
+                  /* Label for selected elements */
+                  *[data-selected="true"]::before {
+                    content: attr(data-selector-type);
+                    position: absolute;
+                    top: -20px;
+                    left: 0;
+                    background: #22c55e;
+                    color: white;
+                    padding: 2px 6px;
+                    border-radius: 4px;
+                    font-size: 12px;
+                    z-index: 1000;
                   }
                 </style>
               </head>
@@ -117,34 +140,91 @@ export function CrawlerAnalyzer() {
             currentElement.setAttribute('data-selected', 'true');
             currentElement.setAttribute('data-selector-type', activeSelector);
 
-            // Generate a selector for this element
+            // Generate an optimized selector
             let selector = '';
+
+            // Try ID first
             if (currentElement.id) {
               selector = `#${currentElement.id}`;
-            } else if (currentElement.className) {
+            } 
+            // Then try unique class combinations
+            else if (currentElement.className) {
               const classes = Array.from(currentElement.classList)
-                .filter(cls => !cls.includes('hover'))
+                .filter(cls => !cls.includes('hover') && !cls.includes('active'))
+                .filter(cls => iframeDoc.querySelectorAll(`.${cls}`).length === 1)
                 .join('.');
-              selector = classes ? `.${classes}` : '';
-            }
-
-            if (!selector) {
-              // Fallback to tag name and nth-child if no ID or class
-              let index = 1;
-              let prev = currentElement.previousElementSibling;
-              while (prev) {
-                if (prev.tagName === currentElement.tagName) {
-                  index++;
-                }
-                prev = prev.previousElementSibling;
+              if (classes) {
+                selector = `.${classes}`;
               }
-              selector = `${currentElement.tagName.toLowerCase()}:nth-child(${index})`;
             }
 
-            // Get the text content or src for images
-            let value = currentElement.tagName.toLowerCase() === 'img' 
-              ? currentElement.getAttribute('src') || ''
-              : currentElement.textContent?.trim() || '';
+            // If no unique selector found, build one using the element hierarchy
+            if (!selector) {
+              const path: string[] = [];
+              let element: HTMLElement | null = currentElement;
+              let foundUniqueSelector = false;
+
+              while (element && element !== iframeDoc.body && !foundUniqueSelector) {
+                let elementSelector = element.tagName.toLowerCase();
+
+                // Add classes if they help make the selector more specific
+                if (element.className) {
+                  const classes = Array.from(element.classList)
+                    .filter(cls => !cls.includes('hover') && !cls.includes('active'))
+                    .join('.');
+                  if (classes) {
+                    elementSelector += `.${classes}`;
+                  }
+                }
+
+                // Add nth-child if needed
+                const siblings = element.parentElement?.children;
+                if (siblings && siblings.length > 1) {
+                  const index = Array.from(siblings).indexOf(element) + 1;
+                  elementSelector += `:nth-child(${index})`;
+                }
+
+                path.unshift(elementSelector);
+
+                // Check if current path is unique
+                const testSelector = path.join(' > ');
+                if (iframeDoc.querySelectorAll(testSelector).length === 1) {
+                  selector = testSelector;
+                  foundUniqueSelector = true;
+                }
+
+                element = element.parentElement;
+              }
+
+              // If still no unique selector, use the full path
+              if (!selector) {
+                selector = path.join(' > ');
+              }
+            }
+
+            // Get the appropriate value based on element type and selector
+            let value = '';
+            if (currentElement.tagName.toLowerCase() === 'img') {
+              value = currentElement.getAttribute('src') || '';
+            } else if (activeSelector === 'ingredients' || activeSelector === 'instructions') {
+              // For lists, try to get all items
+              const listItems = currentElement.querySelectorAll('li');
+              if (listItems.length > 0) {
+                value = Array.from(listItems)
+                  .map(item => item.textContent?.trim())
+                  .filter(Boolean)
+                  .join('\n');
+              } else {
+                value = currentElement.textContent?.trim() || '';
+              }
+            } else if (activeSelector === 'prepTime' || activeSelector === 'cookTime') {
+              // Try to extract just the time value
+              const timeText = currentElement.textContent?.trim() || '';
+              const timeMatch = timeText.match(/\d+\s*(?:minute|min|hour|hr|h|m)s?/i);
+              value = timeMatch ? timeMatch[0] : timeText;
+            } else {
+              value = currentElement.textContent?.trim() || '';
+            }
 
             handleElementSelection(selector, value);
           });
