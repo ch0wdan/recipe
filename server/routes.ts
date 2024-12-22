@@ -3,10 +3,11 @@ import { createServer, type Server } from "http";
 import { db } from "@db";
 import { recipes, comments, ratings, crawlerConfigs, roles, userRoles } from "@db/schema";
 import { eq, and, desc } from "drizzle-orm";
-import { runCrawler } from "./crawler";
+import { runCrawler, analyzeWebsite } from "./crawler";
 import { setupAuth } from "./auth";
 import { requirePermissions } from "./middleware/rbac";
 import cron from "node-cron";
+import { log } from "./vite";
 
 const ADMIN_PERMISSIONS = [
   "manage_users",
@@ -109,6 +110,22 @@ export function registerRoutes(app: Express): Server {
     runCrawler().catch(console.error);
     res.json({ message: "Crawler started" });
   });
+
+  app.post("/api/admin/crawler/analyze", requirePermissions({ permissions: ["manage_crawler"] }), async (req, res) => {
+    try {
+      const { url } = req.body;
+      if (!url) {
+        return res.status(400).json({ error: "URL is required" });
+      }
+
+      const analysis = await analyzeWebsite(url);
+      res.json(analysis);
+    } catch (error) {
+      log(`Error analyzing website: ${error}`, "express");
+      res.status(500).json({ error: "Failed to analyze website" });
+    }
+  });
+
 
   // Comments
   app.post("/api/recipes/:id/comments", async (req, res) => {

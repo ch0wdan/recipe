@@ -24,7 +24,7 @@ import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
 import { useToast } from "@/hooks/use-toast";
-import { Play, Shield, Plus } from "lucide-react";
+import { Play, Shield, Plus, Loader2 } from "lucide-react";
 import { useState } from "react";
 import { useUser } from "@/hooks/use-user";
 import { useForm } from "react-hook-form";
@@ -83,6 +83,34 @@ export function AdminDashboard() {
         ingredients: "",
         instructions: "",
       },
+    },
+  });
+  const [isAnalyzing, setIsAnalyzing] = useState(false);
+  const [analysisResult, setAnalysisResult] = useState<{
+    suggestedConfig: NewCrawlerConfig;
+    sampleData: {
+      recipeLinks: number;
+      sampleTitle?: string;
+      sampleDescription?: string;
+      sampleIngredients?: string[];
+      sampleInstructions?: string[];
+    };
+  } | null>(null);
+
+  const analyzeWebsiteMutation = useMutation({
+    mutationFn: async (url: string) => {
+      const response = await fetch("/api/admin/crawler/analyze", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ url }),
+        credentials: "include",
+      });
+      if (!response.ok) throw new Error(await response.text());
+      return response.json();
+    },
+    onSuccess: (data) => {
+      setAnalysisResult(data);
+      crawlerForm.reset(data.suggestedConfig);
     },
   });
 
@@ -321,17 +349,59 @@ export function AdminDashboard() {
                           </div>
                           <div className="space-y-2">
                             <label className="text-sm font-medium">Site URL</label>
-                            <Input
-                              {...crawlerForm.register("siteUrl")}
-                              placeholder="https://example.com/recipes"
-                            />
+                            <div className="flex gap-2">
+                              <Input
+                                {...crawlerForm.register("siteUrl")}
+                                placeholder="https://example.com/recipes"
+                              />
+                              <Button
+                                type="button"
+                                variant="outline"
+                                onClick={() => {
+                                  const url = crawlerForm.getValues("siteUrl");
+                                  if (url) {
+                                    setIsAnalyzing(true);
+                                    analyzeWebsiteMutation.mutate(url, {
+                                      onSettled: () => setIsAnalyzing(false),
+                                    });
+                                  }
+                                }}
+                                disabled={isAnalyzing}
+                              >
+                                {isAnalyzing ? (
+                                  <Loader2 className="h-4 w-4 animate-spin" />
+                                ) : (
+                                  "Analyze"
+                                )}
+                              </Button>
+                            </div>
                           </div>
                         </div>
+
+                        {analysisResult && (
+                          <div className="rounded-lg border p-4 bg-muted/50">
+                            <h3 className="text-sm font-medium mb-2">Analysis Results</h3>
+                            <dl className="space-y-2 text-sm">
+                              <div>
+                                <dt className="font-medium">Recipe Links Found</dt>
+                                <dd>{analysisResult.sampleData.recipeLinks}</dd>
+                              </div>
+                              {analysisResult.sampleData.sampleTitle && (
+                                <div>
+                                  <dt className="font-medium">Sample Recipe Title</dt>
+                                  <dd>{analysisResult.sampleData.sampleTitle}</dd>
+                                </div>
+                              )}
+                            </dl>
+                          </div>
+                        )}
 
                         <div className="space-y-2">
                           <h3 className="text-sm font-medium">CSS Selectors</h3>
                           <p className="text-sm text-muted-foreground">
-                            Enter CSS selectors to identify recipe elements on the page
+                            {analysisResult
+                              ? "Selectors were automatically detected. You can modify them if needed."
+                              : "Enter CSS selectors to identify recipe elements on the page, or click 'Analyze' to detect them automatically."}
                           </p>
 
                           <div className="grid gap-4">
