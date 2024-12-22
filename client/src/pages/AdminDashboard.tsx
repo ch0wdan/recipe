@@ -18,6 +18,7 @@ import {
   DialogContent,
   DialogHeader,
   DialogTitle,
+  DialogDescription,
   DialogTrigger,
 } from "@/components/ui/dialog";
 import { Button } from "@/components/ui/button";
@@ -283,6 +284,9 @@ export function AdminDashboard() {
                 <DialogContent>
                   <DialogHeader>
                     <DialogTitle>Create New Role</DialogTitle>
+                    <DialogDescription>
+                      Create a new role with specific permissions for user management.
+                    </DialogDescription>
                   </DialogHeader>
                   <div className="space-y-4 py-4">
                     <div className="space-y-2">
@@ -388,6 +392,9 @@ export function AdminDashboard() {
                       <DialogTitle>
                         {editingConfig ? "Edit Recipe Website" : "Add New Recipe Website"}
                       </DialogTitle>
+                      <DialogDescription>
+                        Configure the crawler settings for a recipe website. The crawler will automatically collect recipes from this site.
+                      </DialogDescription>
                     </DialogHeader>
                     <Form {...crawlerForm}>
                       <form
@@ -547,7 +554,7 @@ export function AdminDashboard() {
                     {configs.map((config) => (
                       <TableRow key={config.id}>
                         <TableCell>{config.siteName}</TableCell>
-                        <TableCell className="font-mono text-sm">
+                        <TableCell className="font-mono text-sm truncate max-w-[300px]">
                           {config.siteUrl}
                         </TableCell>
                         <TableCell>
@@ -597,7 +604,7 @@ export function AdminDashboard() {
                             </DropdownMenuTrigger>
                             <DropdownMenuContent align="end">
                               <DropdownMenuItem onClick={() => setEditingConfig(config)}>
-                                Edit
+                                Edit configuration
                               </DropdownMenuItem>
                             </DropdownMenuContent>
                           </DropdownMenu>
