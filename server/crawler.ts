@@ -46,7 +46,15 @@ async function initializeCrawlerConfigs() {
   }
 }
 
-export async function crawlRecipe(url: string, selectors: any) {
+interface Selectors {
+  title: string;
+  description: string;
+  ingredients: string;
+  instructions: string;
+  recipeLinks: string;
+}
+
+export async function crawlRecipe(url: string, selectors: Selectors) {
   try {
     console.log(`Crawling recipe from ${url}`);
     const response = await fetch(url, {
@@ -65,12 +73,12 @@ export async function crawlRecipe(url: string, selectors: any) {
 
     const title = document.querySelector(selectors.title)?.textContent?.trim();
     const description = document.querySelector(selectors.description)?.textContent?.trim();
-    const ingredients = Array.from(document.querySelectorAll(selectors.ingredients))
+    const ingredients = Array.from(document.querySelectorAll<HTMLElement>(selectors.ingredients))
       .map(el => el.textContent?.trim())
-      .filter(Boolean);
-    const instructions = Array.from(document.querySelectorAll(selectors.instructions))
+      .filter((text): text is string => Boolean(text));
+    const instructions = Array.from(document.querySelectorAll<HTMLElement>(selectors.instructions))
       .map(el => el.textContent?.trim())
-      .filter(Boolean);
+      .filter((text): text is string => Boolean(text));
 
     if (!title || !description || ingredients.length === 0 || instructions.length === 0) {
       throw new Error("Failed to extract required recipe data");
@@ -79,8 +87,8 @@ export async function crawlRecipe(url: string, selectors: any) {
     return {
       title,
       description,
-      ingredients: ingredients as string[],
-      instructions: instructions as string[],
+      ingredients,
+      instructions,
       sourceUrl: url,
     };
   } catch (error) {
@@ -110,8 +118,8 @@ export async function runCrawler() {
       const dom = new JSDOM(html);
       const document = dom.window.document;
 
-      const recipeLinks = Array.from(document.querySelectorAll(config.selectors.recipeLinks))
-        .map((link: any) => {
+      const recipeLinks = Array.from(document.querySelectorAll<HTMLAnchorElement>(config.selectors.recipeLinks))
+        .map((link) => {
           const href = link.href;
           if (!href) return null;
           try {
@@ -121,13 +129,13 @@ export async function runCrawler() {
             return null;
           }
         })
-        .filter(Boolean);
+        .filter((url): url is string => Boolean(url));
 
       console.log(`Found ${recipeLinks.length} recipe links on ${config.siteName}`);
 
       for (const link of recipeLinks) {
         await delay(2000); // Ethical crawling delay
-        const recipeData = await crawlRecipe(link, config.selectors);
+        const recipeData = await crawlRecipe(link, config.selectors as Selectors);
 
         if (recipeData) {
           await db.insert(recipes).values({
