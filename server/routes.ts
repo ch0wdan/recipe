@@ -38,6 +38,47 @@ export function registerRoutes(app: Express): Server {
     }
   });
 
+  // Get single recipe with comments and ratings
+  app.get("/api/recipes/:id", async (req, res) => {
+    try {
+      const recipeId = parseInt(req.params.id);
+
+      // Get recipe with its comments and ratings
+      const [recipe] = await db
+        .select()
+        .from(recipes)
+        .where(eq(recipes.id, recipeId))
+        .limit(1);
+
+      if (!recipe) {
+        return res.status(404).json({ error: "Recipe not found" });
+      }
+
+      // Get comments for this recipe
+      const recipeComments = await db
+        .select()
+        .from(comments)
+        .where(eq(comments.recipeId, recipeId))
+        .orderBy(desc(comments.createdAt));
+
+      // Get ratings for this recipe
+      const recipeRatings = await db
+        .select()
+        .from(ratings)
+        .where(eq(ratings.recipeId, recipeId));
+
+      // Combine all data
+      res.json({
+        ...recipe,
+        comments: recipeComments,
+        ratings: recipeRatings,
+      });
+    } catch (error) {
+      log(`Error fetching recipe: ${error}`, "express");
+      res.status(500).json({ error: "Failed to fetch recipe" });
+    }
+  });
+
   // Delete recipe
   app.delete("/api/recipes/:id", async (req, res) => {
     if (!req.isAuthenticated()) {

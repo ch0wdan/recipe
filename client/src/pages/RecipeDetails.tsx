@@ -13,6 +13,7 @@ import { Form } from "@/components/ui/form";
 import { useForm } from "react-hook-form";
 import { Star, Clock, Users, ChefHat } from "lucide-react";
 import { useToast } from "@/hooks/use-toast";
+import type { Recipe } from "@db/schema";
 
 export function RecipeDetails() {
   const [, params] = useRoute("/recipes/:id");
@@ -24,7 +25,7 @@ export function RecipeDetails() {
     },
   });
 
-  const { data: recipe, isLoading } = useQuery({
+  const { data: recipe, isLoading } = useQuery<Recipe>({
     queryKey: [`/api/recipes/${params?.id}`],
     enabled: !!params?.id,
   });
@@ -63,7 +64,17 @@ export function RecipeDetails() {
   });
 
   if (isLoading || !recipe) {
-    return <div>Loading...</div>;
+    return (
+      <div className="container py-8">
+        <Card className="max-w-4xl mx-auto">
+          <CardContent className="py-8">
+            <div className="flex items-center justify-center">
+              <div className="animate-spin rounded-full h-8 w-8 border-b-2 border-primary"></div>
+            </div>
+          </CardContent>
+        </Card>
+      </div>
+    );
   }
 
   return (
