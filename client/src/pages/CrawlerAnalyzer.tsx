@@ -10,21 +10,152 @@ import {
 } from "@/components/ui/card";
 import { Input } from "@/components/ui/input";
 import { Button } from "@/components/ui/button";
-import { Loader2 } from "lucide-react";
+import { Loader2, X } from "lucide-react";
 
-interface SelectedElement {
+interface ElementSelection {
   selector: string;
   type: 'title' | 'description' | 'ingredients' | 'instructions' | 'prepTime' | 'cookTime' | 'difficulty' | 'servings' | 'image';
   value: string;
 }
 
+interface ElementClickMessage {
+  type: 'elementClicked';
+  element: {
+    tagName: string;
+    id: string;
+    className: string;
+    textContent: string;
+    innerHTML: string;
+    src: string | null;
+    dataset: DOMStringMap;
+    path: string;
+  };
+}
+
+interface SelectorMessage {
+  type: 'setActiveSelector' | 'clearSelection';
+  selector: string | null;
+}
+
 export function CrawlerAnalyzer() {
   const { toast } = useToast();
   const [url, setUrl] = useState("");
-  const [selectedElements, setSelectedElements] = useState<SelectedElement[]>([]);
-  const [activeSelector, setActiveSelector] = useState<SelectedElement["type"] | null>(null);
+  const [selectedElements, setSelectedElements] = useState<ElementSelection[]>([]);
+  const [activeSelector, setActiveSelector] = useState<ElementSelection["type"] | null>(null);
   const previewRef = useRef<HTMLDivElement>(null);
   const iframeRef = useRef<HTMLIFrameElement | null>(null);
+
+  const initializeIframe = (iframeDoc: Document, data: { html: string; url: string }) => {
+    iframeDoc.open();
+    iframeDoc.write(`
+      <!DOCTYPE html>
+      <html>
+        <head>
+          <base href="${data.url}">
+          <style>
+            * { outline: none !important; }
+
+            *[data-recipe-element] {
+              transition: all 0.2s ease-in-out;
+            }
+
+            body.selecting *[data-recipe-element]:hover {
+              outline: 2px dashed #3b82f6 !important;
+              cursor: crosshair !important;
+              position: relative;
+            }
+
+            *[data-selected="true"] {
+              outline: 2px solid #22c55e !important;
+              background-color: rgba(34, 197, 94, 0.1) !important;
+              position: relative;
+            }
+
+            *[data-selected="true"]::before {
+              content: attr(data-selector-type);
+              position: absolute;
+              top: -20px;
+              left: 0;
+              background: #22c55e;
+              color: white;
+              padding: 2px 6px;
+              border-radius: 4px;
+              font-size: 12px;
+              z-index: 1000;
+            }
+          </style>
+        </head>
+        <body>
+          ${data.html}
+          <script>
+            document.addEventListener('click', (e) => {
+              e.preventDefault();
+              e.stopPropagation();
+
+              const generateSelector = (element) => {
+                if (!element) return '';
+
+                if (element.id) {
+                  return '#' + element.id;
+                }
+
+                let selector = element.tagName.toLowerCase();
+                const classList = Array.from(element.classList || [])
+                  .filter(cls => !cls.includes('hover') && !cls.includes('active'));
+
+                if (classList.length > 0) {
+                  selector += '.' + classList.join('.');
+                }
+
+                const parent = element.parentElement;
+                if (parent) {
+                  const siblings = Array.from(parent.children)
+                    .filter(child => child.tagName === element.tagName);
+
+                  if (siblings.length > 1) {
+                    const index = siblings.indexOf(element) + 1;
+                    selector += ':nth-child(' + index + ')';
+                  }
+                }
+
+                return selector;
+              };
+
+              if (window.parent) {
+                window.parent.postMessage({
+                  type: 'elementClicked',
+                  element: {
+                    tagName: e.target.tagName,
+                    id: e.target.id,
+                    className: e.target.className,
+                    textContent: e.target.textContent,
+                    innerHTML: e.target.innerHTML,
+                    src: e.target.tagName === 'IMG' ? e.target.src : null,
+                    dataset: e.target.dataset,
+                    path: generateSelector(e.target)
+                  }
+                }, '*');
+              }
+            });
+
+            window.addEventListener('message', (event) => {
+              const data = event.data;
+              if (data.type === 'setActiveSelector') {
+                document.body.classList.toggle('selecting', Boolean(data.selector));
+              } else if (data.type === 'clearSelection' && data.selector) {
+                const element = document.querySelector(data.selector);
+                if (element) {
+                  element.removeAttribute('data-selected');
+                  element.removeAttribute('data-selector-type');
+                }
+              }
+            });
+          </script>
+        </body>
+      </html>
+    `);
+    iframeDoc.close();
+  };
 
   const analyzeUrlMutation = useMutation({
     mutationFn: async (url: string) => {
@@ -50,144 +181,82 @@ export function CrawlerAnalyzer() {
         previewRef.current.innerHTML = '';
         previewRef.current.appendChild(iframe);
 
-        const iframeDoc = iframe.contentWindow?.document;
-        if (iframeDoc) {
-          iframeDoc.open();
-          iframeDoc.write(`
-            <!DOCTYPE html>
-            <html>
-              <head>
-                <base href="${data.url}">
-                <style>
-                  * { outline: none !important; }
-
-                  *[data-recipe-element] {
-                    transition: all 0.2s ease-in-out;
-                  }
-
-                  body.selecting *[data-recipe-element]:hover {
-                    outline: 2px dashed #3b82f6 !important;
-                    cursor: crosshair !important;
-                    position: relative;
-                  }
-
-                  *[data-selected="true"] {
-                    outline: 2px solid #22c55e !important;
-                    background-color: rgba(34, 197, 94, 0.1) !important;
-                    position: relative;
-                  }
-
-                  *[data-selected="true"]::before {
-                    content: attr(data-selector-type);
-                    position: absolute;
-                    top: -20px;
-                    left: 0;
-                    background: #22c55e;
-                    color: white;
-                    padding: 2px 6px;
-                    border-radius: 4px;
-                    font-size: 12px;
-                    z-index: 1000;
-                  }
-                </style>
-              </head>
-              <body>
-                ${data.html}
-                <script>
-                  document.addEventListener('click', (e) => {
-                    e.preventDefault();
-                  });
-
-                  window.addEventListener('message', (event) => {
-                    if (event.data.type === 'setActiveSelector') {
-                      document.body.classList.toggle('selecting', event.data.selector !== null);
-                    }
-                  });
-                </script>
-              </body>
-            </html>
-          `);
-          iframeDoc.close();
-
-          iframeDoc.addEventListener('click', handleElementClick);
+        if (iframe.contentWindow?.document) {
+          initializeIframe(iframe.contentWindow.document, data);
         }
       }
       toast({ title: "Page loaded successfully" });
     },
     onError: (error) => {
-      toast({ 
-        title: "Failed to load page", 
+      toast({
+        title: "Failed to load page",
         description: error.message,
         variant: "destructive"
       });
     },
   });
 
-  const handleElementClick = (e: MouseEvent) => {
-    e.preventDefault();
+  const handleElementClick = (event: MessageEvent<ElementClickMessage>) => {
+    if (event.data.type !== 'elementClicked' || !activeSelector) return;
 
-    if (!activeSelector || !iframeRef.current?.contentWindow?.document) {
-      return;
-    }
+    const { element } = event.data;
 
-    const target = e.target as HTMLElement;
-    if (!target) return;
-
-    const iframeDoc = iframeRef.current.contentWindow.document;
-
-    // Generate selector for the clicked element
-    let selector = '';
-    if (target.id) {
-      selector = `#${target.id}`;
-    } else if (target.className) {
-      const classes = Array.from(target.classList).join('.');
-      selector = classes ? `.${classes}` : target.tagName.toLowerCase();
-    } else {
-      selector = target.tagName.toLowerCase();
-    }
-
-    // Extract value based on the type
+    // Extract value based on the selector type
     let value = '';
-    if (target.tagName.toLowerCase() === 'img') {
-      value = target.getAttribute('src') || '';
+    if (element.tagName.toLowerCase() === 'img') {
+      value = element.src || '';
     } else if (activeSelector === 'ingredients' || activeSelector === 'instructions') {
-      const listItems = target.querySelectorAll('li');
-      if (listItems.length > 0) {
-        value = Array.from(listItems)
-          .map(item => item.textContent?.trim())
+      const listItems = element.innerHTML.match(/<li[^>]*>(.*?)<\/li>/g);
+      if (listItems) {
+        value = listItems
+          .map(item => item.replace(/<[^>]*>/g, '').trim())
           .filter(Boolean)
           .join('\n');
       } else {
-        value = target.textContent?.trim() || '';
+        value = element.textContent?.trim() || '';
       }
     } else {
-      value = target.textContent?.trim() || '';
+      value = element.textContent?.trim() || '';
     }
 
-    // Update selections
-    setSelectedElements(prev => {
-      const filtered = prev.filter(el => el.type !== activeSelector);
-      return [...filtered, { selector, type: activeSelector, value }];
-    });
+    // Add new selection
+    const selection = {
+      selector: element.path,
+      type: activeSelector,
+      value
+    };
 
-    // Mark element as selected
-    const previousSelected = iframeDoc.querySelector(`[data-selected="true"][data-selector-type="${activeSelector}"]`);
-    if (previousSelected) {
-      previousSelected.removeAttribute('data-selected');
-      previousSelected.removeAttribute('data-selector-type');
+    setSelectedElements(prev => [...prev, selection]);
+
+    // Mark element as selected in iframe
+    if (iframeRef.current?.contentWindow?.document) {
+      const targetElement = iframeRef.current.contentWindow.document.querySelector(element.path);
+      if (targetElement) {
+        targetElement.setAttribute('data-selected', 'true');
+        targetElement.setAttribute('data-selector-type', activeSelector);
+      }
     }
-
-    target.setAttribute('data-selected', 'true');
-    target.setAttribute('data-selector-type', activeSelector);
-
-    // Clear active selector
-    setActiveSelector(null);
 
     // Show success message
     toast({
-      title: `Selected ${activeSelector}`,
+      title: `Added ${activeSelector} selector`,
       description: `Value: ${value.substring(0, 50)}${value.length > 50 ? '...' : ''}`,
     });
+  };
+
+  const removeSelection = (index: number) => {
+    const selection = selectedElements[index];
+
+    // Remove selection highlight from iframe
+    if (iframeRef.current?.contentWindow) {
+      iframeRef.current.contentWindow.postMessage({
+        type: 'clearSelection',
+        selector: selection.selector
+      } as SelectorMessage, '*');
+    }
+
+    // Remove from state
+    setSelectedElements(prev => prev.filter((_, i) => i !== index));
   };
 
   const saveConfigMutation = useMutation({
@@ -211,8 +280,8 @@ export function CrawlerAnalyzer() {
       }
     },
     onError: (error) => {
-      toast({ 
-        title: "Failed to save configuration", 
+      toast({
+        title: "Failed to save configuration",
         description: error.message,
         variant: "destructive"
       });
@@ -221,7 +290,11 @@ export function CrawlerAnalyzer() {
 
   const handleSaveConfig = () => {
     const selectors = selectedElements.reduce((acc, { type, selector }) => {
-      acc[type] = selector;
+      if (acc[type]) {
+        acc[type] = `${acc[type]}, ${selector}`;
+      } else {
+        acc[type] = selector;
+      }
       return acc;
     }, {} as Record<string, string>);
 
@@ -229,11 +302,17 @@ export function CrawlerAnalyzer() {
   };
 
   useEffect(() => {
+    const handleMessage = (event: MessageEvent<ElementClickMessage>) => handleElementClick(event);
+    window.addEventListener('message', handleMessage);
+    return () => window.removeEventListener('message', handleMessage);
+  }, [activeSelector]);
+
+  useEffect(() => {
     if (iframeRef.current?.contentWindow) {
       iframeRef.current.contentWindow.postMessage({
         type: 'setActiveSelector',
         selector: activeSelector
-      }, '*');
+      } as SelectorMessage, '*');
     }
   }, [activeSelector]);
 
@@ -283,14 +362,16 @@ export function CrawlerAnalyzer() {
                     <Button
                       key={type}
                       variant={activeSelector === type ? "default" : "outline"}
-                      onClick={() => setActiveSelector(type as SelectedElement["type"])}
+                      onClick={() => setActiveSelector(type as ElementSelection["type"])}
                       className={`justify-start ${
                         selectedElements.some(el => el.type === type) ? "border-green-500" : ""
                       }`}
                     >
                       {type}
-                      {selectedElements.some(el => el.type === type) && (
-                        <span className="ml-2 text-green-500">✓</span>
+                      {selectedElements.filter(el => el.type === type).length > 0 && (
+                        <span className="ml-2 text-green-500">{
+                          selectedElements.filter(el => el.type === type).length
+                        }</span>
                       )}
                     </Button>
                   ))}
@@ -298,15 +379,23 @@ export function CrawlerAnalyzer() {
 
                 <div className="mt-4">
                   <h4 className="font-medium mb-2">Selected Elements</h4>
-                  <div className="space-y-2">
-                    {selectedElements.map(({ type, selector, value }) => (
+                  <div className="space-y-2 max-h-[400px] overflow-y-auto">
+                    {selectedElements.map((element, index) => (
                       <div
-                        key={type}
-                        className="p-2 border rounded-md text-sm"
+                        key={`${element.type}-${index}`}
+                        className="p-2 border rounded-md text-sm relative group"
                       >
-                        <div className="font-medium">{type}</div>
-                        <div className="text-muted-foreground">{selector}</div>
-                        <div className="text-xs truncate">{value}</div>
+                        <Button
+                          variant="ghost"
+                          size="icon"
+                          className="absolute right-2 top-2 opacity-0 group-hover:opacity-100 transition-opacity"
+                          onClick={() => removeSelection(index)}
+                        >
+                          <X className="h-4 w-4" />
+                        </Button>
+                        <div className="font-medium">{element.type}</div>
+                        <div className="text-muted-foreground break-all pr-8">{element.selector}</div>
+                        <div className="text-xs truncate mt-1">{element.value}</div>
                       </div>
                     ))}
                   </div>
