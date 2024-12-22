@@ -24,18 +24,32 @@ import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
 import { useToast } from "@/hooks/use-toast";
-import { Play, Shield, Plus, Loader2 } from "lucide-react";
-import { useState } from "react";
+import { Play, Shield, Plus, Loader2, MoreHorizontal } from "lucide-react";
+import { useState, useEffect } from "react";
 import { useUser } from "@/hooks/use-user";
 import { useForm } from "react-hook-form";
 import { Form } from "@/components/ui/form";
 import { Textarea } from "@/components/ui/textarea";
 import { Switch } from "@/components/ui/switch";
+import {
+  DropdownMenu,
+  DropdownMenuContent,
+  DropdownMenuItem,
+  DropdownMenuTrigger,
+} from "@/components/ui/dropdown-menu";
 
 interface Role {
   id: number;
   name: string;
   permissions: string[];
+}
+
+interface Selectors {
+  recipeLinks: string;
+  title: string;
+  description: string;
+  ingredients: string;
+  instructions: string;
 }
 
 interface CrawlerConfig {
@@ -44,26 +58,14 @@ interface CrawlerConfig {
   siteUrl: string;
   enabled: boolean;
   lastCrawl: string | null;
-  selectors: {
-    recipeLinks: string;
-    title: string;
-    description: string;
-    ingredients: string;
-    instructions: string;
-  };
+  selectors: Selectors;
 }
 
 interface NewCrawlerConfig {
   siteName: string;
   siteUrl: string;
   enabled: boolean;
-  selectors: {
-    recipeLinks: string;
-    title: string;
-    description: string;
-    ingredients: string;
-    instructions: string;
-  };
+  selectors: Selectors;
 }
 
 export function AdminDashboard() {
@@ -96,6 +98,7 @@ export function AdminDashboard() {
       sampleInstructions?: string[];
     };
   } | null>(null);
+  const [editingConfig, setEditingConfig] = useState<CrawlerConfig | null>(null);
 
   const analyzeWebsiteMutation = useMutation({
     mutationFn: async (url: string) => {
@@ -114,9 +117,7 @@ export function AdminDashboard() {
     },
   });
 
-  // Check if user has permission to manage roles
   const canManageRoles = hasPermission("manage_roles");
-  // Check if user has permission to manage crawler
   const canManageCrawler = hasPermission("manage_crawler");
 
   const { data: configs = [], refetch: refetchCrawler } = useQuery<CrawlerConfig[]>({
@@ -169,6 +170,25 @@ export function AdminDashboard() {
     },
   });
 
+  const updateCrawlerMutation = useMutation({
+    mutationFn: async (data: CrawlerConfig) => {
+      const response = await fetch(`/api/admin/crawler/${data.id}`, {
+        method: "PUT",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify(data),
+        credentials: "include",
+      });
+      if (!response.ok) throw new Error(await response.text());
+      return response.json();
+    },
+    onSuccess: () => {
+      toast({ title: "Crawler configuration updated successfully" });
+      setEditingConfig(null);
+      crawlerForm.reset();
+      refetchCrawler();
+    },
+  });
+
   const runCrawlerMutation = useMutation({
     mutationFn: async () => {
       const response = await fetch("/api/admin/crawler/run", {
@@ -183,6 +203,25 @@ export function AdminDashboard() {
       refetchCrawler();
     },
   });
+
+  const handleCrawlerSubmit = (data: NewCrawlerConfig) => {
+    if (editingConfig) {
+      updateCrawlerMutation.mutate({ ...data, id: editingConfig.id, lastCrawl: editingConfig.lastCrawl });
+    } else {
+      createCrawlerMutation.mutate(data);
+    }
+  };
+
+  useEffect(() => {
+    if (editingConfig) {
+      crawlerForm.reset({
+        siteName: editingConfig.siteName,
+        siteUrl: editingConfig.siteUrl,
+        enabled: editingConfig.enabled,
+        selectors: editingConfig.selectors,
+      });
+    }
+  }, [editingConfig, crawlerForm]);
 
   const AVAILABLE_PERMISSIONS = [
     "manage_users",
@@ -321,7 +360,7 @@ export function AdminDashboard() {
             <div className="flex justify-between items-center mb-8">
               <h2 className="text-3xl font-bold">Crawler Management</h2>
               <div className="flex gap-2">
-                <Dialog>
+                <Dialog open={!!editingConfig || undefined} onOpenChange={(open) => !open && setEditingConfig(null)}>
                   <DialogTrigger asChild>
                     <Button variant="outline">
                       <Plus className="h-4 w-4 mr-2" />
@@ -330,13 +369,11 @@ export function AdminDashboard() {
                   </DialogTrigger>
                   <DialogContent className="max-w-2xl">
                     <DialogHeader>
-                      <DialogTitle>Add New Recipe Website</DialogTitle>
+                      <DialogTitle>{editingConfig ? "Edit Recipe Website" : "Add New Recipe Website"}</DialogTitle>
                     </DialogHeader>
                     <Form {...crawlerForm}>
                       <form
-                        onSubmit={crawlerForm.handleSubmit((data) =>
-                          createCrawlerMutation.mutate(data)
-                        )}
+                        onSubmit={crawlerForm.handleSubmit(handleCrawlerSubmit)}
                         className="space-y-4"
                       >
                         <div className="grid grid-cols-2 gap-4">
@@ -459,7 +496,7 @@ export function AdminDashboard() {
                         </div>
 
                         <Button type="submit" className="w-full">
-                          Add Website
+                          {editingConfig ? "Update Website" : "Add Website"}
                         </Button>
                       </form>
                     </Form>
@@ -485,6 +522,7 @@ export function AdminDashboard() {
                       <TableHead>URL</TableHead>
                       <TableHead>Last Crawl</TableHead>
                       <TableHead>Status</TableHead>
+                      <TableHead className="w-[60px]"></TableHead>
                     </TableRow>
                   </TableHeader>
                   <TableBody>
@@ -509,6 +547,21 @@ export function AdminDashboard() {
                           >
                             {config.enabled ? "Active" : "Disabled"}
                           </span>
+                        </TableCell>
+                        <TableCell>
+                          <DropdownMenu>
+                            <DropdownMenuTrigger asChild>
+                              <Button variant="ghost" className="h-8 w-8 p-0">
+                                <span className="sr-only">Open menu</span>
+                                <MoreHorizontal className="h-4 w-4" />
+                              </Button>
+                            </DropdownMenuTrigger>
+                            <DropdownMenuContent align="end">
+                              <DropdownMenuItem onClick={() => setEditingConfig(config)}>
+                                Edit
+                              </DropdownMenuItem>
+                            </DropdownMenuContent>
+                          </DropdownMenu>
                         </TableCell>
                       </TableRow>
                     ))}

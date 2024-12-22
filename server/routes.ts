@@ -94,6 +94,30 @@ export function registerRoutes(app: Express): Server {
     }
   });
 
+  app.put("/api/admin/crawler/:id", requirePermissions({ permissions: ["manage_crawler"] }), async (req, res) => {
+    try {
+      const [config] = await db
+        .update(crawlerConfigs)
+        .set({
+          siteName: req.body.siteName,
+          siteUrl: req.body.siteUrl,
+          enabled: req.body.enabled,
+          selectors: req.body.selectors,
+        })
+        .where(eq(crawlerConfigs.id, parseInt(req.params.id)))
+        .returning();
+
+      if (!config) {
+        return res.status(404).json({ error: "Crawler configuration not found" });
+      }
+
+      res.json(config);
+    } catch (error) {
+      log(`Error updating crawler config: ${error}`, "express");
+      res.status(500).json({ error: "Failed to update crawler configuration" });
+    }
+  });
+
   app.post("/api/admin/crawler/run", requirePermissions({ permissions: ["manage_crawler"] }), async (req, res) => {
     try {
       runCrawler().catch(error => {

@@ -1,6 +1,6 @@
 import { JSDOM } from "jsdom";
 import { db } from "@db";
-import { crawlerConfigs, recipes } from "@db/schema";
+import { crawlerConfigs, recipes, type CrawlerConfig } from "@db/schema";
 import { eq } from "drizzle-orm";
 import { log } from "./vite";
 
@@ -245,9 +245,12 @@ export async function runCrawler() {
       log(`Starting crawl for ${config.siteName}`, "crawler");
 
       // If selectors are not defined, try to detect them
+      let selectorsToUse: Selectors;
       if (!config.selectors || Object.keys(config.selectors).length === 0) {
         log(`No selectors defined for ${config.siteName}, attempting to detect...`, "crawler");
-        config.selectors = await detectSelectors(config.siteUrl);
+        selectorsToUse = await detectSelectors(config.siteUrl);
+      } else {
+        selectorsToUse = config.selectors as Selectors;
       }
 
       const response = await fetch(config.siteUrl, {
@@ -265,7 +268,7 @@ export async function runCrawler() {
       const document = dom.window.document;
 
       const recipeLinks = await Promise.all(
-        Array.from(document.querySelectorAll<HTMLAnchorElement>(config.selectors.recipeLinks))
+        Array.from(document.querySelectorAll<HTMLAnchorElement>(selectorsToUse.recipeLinks))
           .map(async (link) => {
             const href = link.href || link.getAttribute("href");
             if (!href) return null;
@@ -283,7 +286,7 @@ export async function runCrawler() {
 
       for (const link of validLinks) {
         await delay(2000); // Ethical crawling delay
-        const recipeData = await crawlRecipe(link, config.selectors as Selectors);
+        const recipeData = await crawlRecipe(link, selectorsToUse);
 
         if (recipeData) {
           await db.insert(recipes).values({
