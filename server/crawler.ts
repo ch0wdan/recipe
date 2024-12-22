@@ -11,7 +11,8 @@ export const selectorsSchema = z.object({
   title: z.string(),
   description: z.string(),
   ingredients: z.string(),
-  instructions: z.string()
+  instructions: z.string(),
+  image: z.string().optional(),
 });
 
 type Selectors = z.infer<typeof selectorsSchema>;
@@ -54,6 +55,11 @@ async function normalizeUrl(url: string, baseUrl: string): Promise<string> {
     const cleanUrl = url.trim().replace(/\s+/g, '');
     if (!cleanUrl) return '';
 
+    // Handle data URLs (common for images)
+    if (cleanUrl.startsWith('data:')) {
+      return cleanUrl;
+    }
+
     if (cleanUrl.startsWith('http://') || cleanUrl.startsWith('https://')) {
       return cleanUrl;
     }
@@ -87,7 +93,7 @@ async function findRecipeLinks(document: Document, selector: string, baseUrl: st
   const parentElement = document.querySelector(selector)?.parentElement;
   if (parentElement) {
     log(`Parent element HTML structure:`, "crawler");
-    log(parentElement.outerHTML.slice(0, 500), "crawler"); // Log first 500 chars to avoid overwhelming logs
+    log(parentElement.outerHTML.slice(0, 500), "crawler");
   }
 
   const recipeLinks = await Promise.all(
@@ -99,7 +105,7 @@ async function findRecipeLinks(document: Document, selector: string, baseUrl: st
         const normalizedUrl = await normalizeUrl(href, baseUrl);
         if (!normalizedUrl) return null;
 
-        // Enhanced recipe URL detection - more flexible patterns
+        // Enhanced recipe URL detection
         const isRecipeUrl = normalizedUrl.toLowerCase().includes('recipe') ||
           normalizedUrl.toLowerCase().includes('recipes') ||
           normalizedUrl.toLowerCase().includes('cast-iron') ||
@@ -131,6 +137,53 @@ async function findRecipeLinks(document: Document, selector: string, baseUrl: st
   return validLinks;
 }
 
+async function extractImage(document: Document, selectors: Selectors, baseUrl: string): Promise<string | null> {
+  try {
+    // Try multiple selectors to find the image
+    const imageSelectors = [
+      selectors.image,
+      "[itemprop='image']",
+      ".recipe-image img",
+      ".hero-image img",
+      "meta[property='og:image']",
+      "img[class*='recipe']",
+      ".main-image img",
+      "[property='og:image']",
+    ].filter(Boolean);
+
+    for (const selector of imageSelectors) {
+      const element = document.querySelector(selector);
+      if (!element) continue;
+
+      let imageUrl: string | null = null;
+
+      if (element instanceof HTMLImageElement) {
+        imageUrl = element.src || element.dataset.src;
+      } else if (element instanceof HTMLMetaElement) {
+        imageUrl = element.content;
+      } else {
+        imageUrl = element.getAttribute('src') || 
+                  element.getAttribute('data-src') || 
+                  element.getAttribute('content');
+      }
+
+      if (imageUrl) {
+        const normalizedUrl = await normalizeUrl(imageUrl, baseUrl);
+        if (normalizedUrl) {
+          log(`Found image URL: ${normalizedUrl}`, "crawler");
+          return normalizedUrl;
+        }
+      }
+    }
+
+    log(`No image found using selectors: ${imageSelectors.join(', ')}`, "crawler");
+    return null;
+  } catch (error) {
+    log(`Error extracting image: ${error}`, "crawler");
+    return null;
+  }
+}
+
 async function crawlRecipe(url: string, selectors: Selectors) {
   try {
     log(`Crawling recipe from ${url}`, "crawler");
@@ -139,51 +192,37 @@ async function crawlRecipe(url: string, selectors: Selectors) {
     const dom = new JSDOM(html);
     const document = dom.window.document;
 
-    // More robust title extraction
-    const title = document.querySelector(selectors.title)?.textContent?.trim() ||
-                 document.querySelector("h1")?.textContent?.trim() ||
-                 document.querySelector("[itemtype*='Recipe'] h1")?.textContent?.trim();
+    // Extract recipe data with detailed logging
+    const title = document.querySelector(selectors.title)?.textContent?.trim();
+    log(`Found title: ${title}`, "crawler");
 
-    // Enhanced description extraction
     const description = document.querySelector(selectors.description)?.textContent?.trim() ||
-                       document.querySelector("meta[name='description']")?.getAttribute("content")?.trim() ||
-                       document.querySelector(".recipe-summary")?.textContent?.trim() ||
-                       document.querySelector("[itemprop='description']")?.textContent?.trim() ||
-                       document.querySelector(".recipe-description")?.textContent?.trim();
+                       document.querySelector("meta[name='description']")?.getAttribute("content")?.trim();
+    log(`Found description: ${description?.substring(0, 100)}...`, "crawler");
 
-    // Improved ingredients extraction with deduplication
+    // Extract image with new helper function
+    const imageUrl = await extractImage(document, selectors, url);
+    log(`Found image URL: ${imageUrl}`, "crawler");
+
+    // Extract ingredients with deduplication
     const ingredientsSet = new Set<string>();
-    document.querySelectorAll<HTMLElement>(selectors.ingredients).forEach(el => {
+    document.querySelectorAll(selectors.ingredients).forEach(el => {
       const text = el.textContent?.trim();
       if (text && text.length > 1) {
         ingredientsSet.add(text);
       }
     });
     const ingredients = Array.from(ingredientsSet);
+    log(`Found ${ingredients.length} ingredients`, "crawler");
 
-    // Enhanced instructions extraction with fallback selectors
-    let instructions: string[] = [];
-    const instructionsSelectors = [
-      selectors.instructions,
-      "ol li",
-      ".recipe-method li",
-      ".recipe-steps li",
-      "[itemprop='recipeInstructions'] li",
-      ".preparation-steps li"
-    ];
-
-    for (const selector of instructionsSelectors) {
-      const elements = document.querySelectorAll<HTMLElement>(selector);
-      if (elements.length > 0) {
-        instructions = Array.from(elements)
-          .map(el => el.textContent?.trim())
-          .filter((text): text is string => {
-            if (!text) return false;
-            return text.length > 5 && !/^(step|[0-9]+\.?)$/i.test(text);
-          });
-        if (instructions.length > 0) break;
-      }
-    }
+    // Extract instructions with validation
+    const instructions = Array.from(document.querySelectorAll(selectors.instructions))
+      .map(el => el.textContent?.trim())
+      .filter((text): text is string => {
+        if (!text) return false;
+        return text.length > 5 && !/^(step|[0-9]+\.?)$/i.test(text);
+      });
+    log(`Found ${instructions.length} instructions`, "crawler");
 
     if (!title || !description || ingredients.length === 0 || instructions.length === 0) {
       log(`Failed to extract required recipe data from ${url}`, "crawler");
@@ -200,6 +239,7 @@ async function crawlRecipe(url: string, selectors: Selectors) {
       ingredients,
       instructions,
       sourceUrl: url,
+      imageUrl: imageUrl,
     };
   } catch (error) {
     log(`Failed to crawl recipe from ${url}: ${error}`, "crawler");
@@ -340,6 +380,13 @@ export async function analyzeWebsite(url: string) {
         ".recipe-method li",
         "ol li",
       ],
+      image: [
+        ".hero-image img",
+        "[itemprop='image']",
+        ".recipe-image img",
+        "img[src*='recipe']",
+        "meta[property='og:image']"
+      ]
     };
 
     const findFirstMatch = (document: Document, selectors: string[]): string => {
@@ -368,6 +415,7 @@ export async function analyzeWebsite(url: string) {
       description: findFirstMatch(document, patterns.description),
       ingredients: findFirstMatch(document, patterns.ingredients),
       instructions: findFirstMatch(document, patterns.instructions),
+      image: findFirstMatch(document, patterns.image),
     };
 
     log(`Detected selectors for ${url}:`, "crawler");
@@ -398,6 +446,7 @@ export async function analyzeWebsite(url: string) {
         sampleDescription: sampleRecipe?.description,
         sampleIngredients: sampleRecipe?.ingredients,
         sampleInstructions: sampleRecipe?.instructions,
+        sampleImageUrl: sampleRecipe?.imageUrl,
       },
     };
   } catch (error) {
@@ -416,12 +465,13 @@ const DEFAULT_CONFIGS = [
       description: "[class*='description'], .recipe-summary, meta[name='description']",
       ingredients: "[class*='ingredients'] li, .ingredient-list li",
       instructions: "[class*='instructions'] li, [class*='steps'] li, .recipe-method li",
+      image: ".recipe-image img, .hero-image img, img[class*='recipe'], [itemprop='image'], meta[property='og:image']"
     } satisfies Selectors,
     enabled: true,
   },
 ];
 
-async function initializeCrawlerConfigs() {
+export async function initializeCrawlerConfigs() {
   try {
     log("Initializing default crawler configurations", "crawler");
     for (const config of DEFAULT_CONFIGS) {
