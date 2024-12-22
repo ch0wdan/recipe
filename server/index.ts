@@ -50,7 +50,7 @@ app.use((err: any, _req: Request, res: Response, _next: NextFunction) => {
 
 (async () => {
   try {
-    // Test database connection and initialize schema
+    // Push database schema
     try {
       log("Testing database connection...", "express");
       await db.select().from(users).limit(1);
@@ -58,12 +58,6 @@ app.use((err: any, _req: Request, res: Response, _next: NextFunction) => {
     } catch (error) {
       if ((error as Error).message.includes('relation "users" does not exist')) {
         log("Database tables don't exist, pushing schema...", "express");
-        await execute_sql_tool({
-          sql_query: `
-            CREATE EXTENSION IF NOT EXISTS "uuid-ossp";
-          `
-        });
-        log("Created uuid extension", "express");
 
         // Push schema using drizzle-kit
         const { execSync } = require('child_process');

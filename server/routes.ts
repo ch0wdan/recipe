@@ -2,7 +2,7 @@ import type { Express } from "express";
 import { createServer, type Server } from "http";
 import { db } from "@db";
 import { recipes, comments, ratings, crawlerConfigs, roles, userRoles } from "@db/schema";
-import { eq, and, desc } from "drizzle-orm";
+import { eq, and, desc, sql } from "drizzle-orm";
 import { runCrawler, analyzeWebsite } from "./crawler";
 import { setupAuth } from "./auth";
 import { requirePermissions } from "./middleware/rbac";
@@ -35,6 +35,64 @@ export function registerRoutes(app: Express): Server {
     } catch (error) {
       log(`Error fetching recipes: ${error}`, "express");
       res.status(500).json({ error: "Failed to fetch recipes" });
+    }
+  });
+
+  // Delete recipe
+  app.delete("/api/recipes/:id", async (req, res) => {
+    if (!req.isAuthenticated()) {
+      return res.status(401).send("Not authenticated");
+    }
+
+    try {
+      const recipeId = parseInt(req.params.id);
+
+      // First check if the recipe exists and get its details
+      const [recipe] = await db
+        .select()
+        .from(recipes)
+        .where(eq(recipes.id, recipeId))
+        .limit(1);
+
+      if (!recipe) {
+        return res.status(404).json({ error: "Recipe not found" });
+      }
+
+      // Check if user is authorized to delete this recipe
+      const isAdmin = req.user!.isAdmin;
+      const isOwner = recipe.userId === req.user!.id;
+      const hasModerationPermission = await db
+        .select()
+        .from(userRoles)
+        .innerJoin(roles, eq(roles.id, userRoles.roleId))
+        .where(and(
+          eq(userRoles.userId, req.user!.id),
+          sql`'moderate_recipes' = ANY(${roles.permissions})`
+        ))
+        .limit(1);
+
+      if (!isAdmin && !isOwner && !hasModerationPermission.length) {
+        return res.status(403).json({ error: "Not authorized to delete this recipe" });
+      }
+
+      // Delete associated comments and ratings first
+      await db
+        .delete(comments)
+        .where(eq(comments.recipeId, recipeId));
+
+      await db
+        .delete(ratings)
+        .where(eq(ratings.recipeId, recipeId));
+
+      // Finally delete the recipe
+      await db
+        .delete(recipes)
+        .where(eq(recipes.id, recipeId));
+
+      res.json({ message: "Recipe deleted successfully" });
+    } catch (error) {
+      log(`Error deleting recipe: ${error}`, "express");
+      res.status(500).json({ error: "Failed to delete recipe" });
     }
   });
 

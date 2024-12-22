@@ -3,14 +3,18 @@ import { db } from "@db";
 import { crawlerConfigs, recipes, type CrawlerConfig } from "@db/schema";
 import { eq, and } from "drizzle-orm";
 import { log } from "./vite";
+import { z } from "zod";
 
-interface Selectors {
-  recipeLinks: string;
-  title: string;
-  description: string;
-  ingredients: string;
-  instructions: string;
-}
+// Define strict types for crawler configuration
+export const selectorsSchema = z.object({
+  recipeLinks: z.string(),
+  title: z.string(),
+  description: z.string(),
+  ingredients: z.string(),
+  instructions: z.string()
+});
+
+type Selectors = z.infer<typeof selectorsSchema>;
 
 async function delay(ms: number) {
   return new Promise(resolve => setTimeout(resolve, ms));
@@ -47,28 +51,23 @@ async function fetchWithRetry(url: string, maxRetries = 3): Promise<Response> {
 
 async function normalizeUrl(url: string, baseUrl: string): Promise<string> {
   try {
-    // Handle special cases where URL might be malformed
     const cleanUrl = url.trim().replace(/\s+/g, '');
     if (!cleanUrl) return '';
 
-    // If it's already an absolute URL, just return it
     if (cleanUrl.startsWith('http://') || cleanUrl.startsWith('https://')) {
       return cleanUrl;
     }
 
-    // Handle protocol-relative URLs
     if (cleanUrl.startsWith('//')) {
       const baseUrlObj = new URL(baseUrl);
       return `${baseUrlObj.protocol}${cleanUrl}`;
     }
 
-    // Handle root-relative URLs
     if (cleanUrl.startsWith('/')) {
       const baseUrlObj = new URL(baseUrl);
       return `${baseUrlObj.origin}${cleanUrl}`;
     }
 
-    // Handle relative URLs
     const base = new URL(baseUrl);
     const normalized = new URL(cleanUrl, base);
     return normalized.toString();
@@ -93,13 +92,14 @@ async function findRecipeLinks(document: Document, selector: string, baseUrl: st
         const normalizedUrl = await normalizeUrl(href, baseUrl);
         if (!normalizedUrl) return null;
 
-        // Only keep links that look like recipe pages
-        if (normalizedUrl.includes('/recipe') || 
-            normalizedUrl.includes('/recipes') ||
-            normalizedUrl.includes('cast-iron')) {
-          return normalizedUrl;
-        }
-        return null;
+        // Enhanced recipe URL detection
+        const isRecipeUrl = normalizedUrl.includes('/recipe') ||
+          normalizedUrl.includes('/recipes') ||
+          normalizedUrl.includes('cast-iron') ||
+          normalizedUrl.includes('cookware') ||
+          /\d{4}|\d{2}/.test(normalizedUrl); // Often recipes have dates or IDs in URL
+
+        return isRecipeUrl ? normalizedUrl : null;
       } catch (e) {
         log(`Invalid URL: ${href}`, "crawler");
         return null;
@@ -110,7 +110,6 @@ async function findRecipeLinks(document: Document, selector: string, baseUrl: st
   const validLinks = recipeLinks.filter((url): url is string => Boolean(url));
   log(`Found ${validLinks.length} valid recipe links`, "crawler");
 
-  // Log a sample of the links found
   if (validLinks.length > 0) {
     log(`Sample recipe links:`, "crawler");
     validLinks.slice(0, 3).forEach(link => log(`- ${link}`, "crawler"));
@@ -127,52 +126,49 @@ async function crawlRecipe(url: string, selectors: Selectors) {
     const dom = new JSDOM(html);
     const document = dom.window.document;
 
-    // More flexible title selection
+    // More robust title extraction
     const title = document.querySelector(selectors.title)?.textContent?.trim() ||
-                 document.querySelector("h1")?.textContent?.trim();
+                 document.querySelector("h1")?.textContent?.trim() ||
+                 document.querySelector("[itemtype*='Recipe'] h1")?.textContent?.trim();
 
-    // Try multiple approaches for description
+    // Enhanced description extraction
     const description = document.querySelector(selectors.description)?.textContent?.trim() ||
                        document.querySelector("meta[name='description']")?.getAttribute("content")?.trim() ||
                        document.querySelector(".recipe-summary")?.textContent?.trim() ||
-                       document.querySelector("[itemprop='description']")?.textContent?.trim();
+                       document.querySelector("[itemprop='description']")?.textContent?.trim() ||
+                       document.querySelector(".recipe-description")?.textContent?.trim();
 
-    // Enhanced ingredients extraction
-    const ingredients = Array.from(
-      document.querySelectorAll<HTMLElement>(selectors.ingredients)
-    )
-      .map((el) => el.textContent?.trim())
-      .filter((text): text is string => Boolean(text))
-      .filter(text => text.length > 1); // Filter out single characters
+    // Improved ingredients extraction with deduplication
+    const ingredientsSet = new Set<string>();
+    document.querySelectorAll<HTMLElement>(selectors.ingredients).forEach(el => {
+      const text = el.textContent?.trim();
+      if (text && text.length > 1) {
+        ingredientsSet.add(text);
+      }
+    });
+    const ingredients = Array.from(ingredientsSet);
 
-    // Enhanced instructions extraction with fallbacks
-    let instructions = Array.from(
-      document.querySelectorAll<HTMLElement>(selectors.instructions)
-    )
-      .map((el) => el.textContent?.trim())
-      .filter((text): text is string => Boolean(text));
+    // Enhanced instructions extraction with fallback selectors
+    let instructions: string[] = [];
+    const instructionsSelectors = [
+      selectors.instructions,
+      "ol li",
+      ".recipe-method li",
+      ".recipe-steps li",
+      "[itemprop='recipeInstructions'] li",
+      ".preparation-steps li"
+    ];
 
-    // If no instructions found with primary selector, try alternatives
-    if (instructions.length === 0) {
-      const alternativeSelectors = [
-        "ol li",
-        ".recipe-method li",
-        ".recipe-steps li",
-        "[itemprop='recipeInstructions'] li",
-        ".preparation-steps li"
-      ];
-
-      for (const selector of alternativeSelectors) {
-        instructions = Array.from(
-          document.querySelectorAll<HTMLElement>(selector)
-        )
-          .map((el) => el.textContent?.trim())
-          .filter((text): text is string => Boolean(text));
-
-        if (instructions.length > 0) {
-          log(`Found instructions using alternative selector: ${selector}`, "crawler");
-          break;
-        }
+    for (const selector of instructionsSelectors) {
+      const elements = document.querySelectorAll<HTMLElement>(selector);
+      if (elements.length > 0) {
+        instructions = Array.from(elements)
+          .map(el => el.textContent?.trim())
+          .filter((text): text is string => {
+            if (!text) return false;
+            return text.length > 5 && !/^(step|[0-9]+\.?)$/i.test(text);
+          });
+        if (instructions.length > 0) break;
       }
     }
 
@@ -217,7 +213,8 @@ export async function runCrawler() {
         const dom = new JSDOM(html);
         const document = dom.window.document;
 
-        const validLinks = await findRecipeLinks(document, config.selectors.recipeLinks, config.siteUrl);
+        const selectors = selectorsSchema.parse(config.selectors);
+        const validLinks = await findRecipeLinks(document, selectors.recipeLinks, config.siteUrl);
         log(`Found ${validLinks.length} valid recipe links on ${config.siteName}`, "crawler");
 
         let newRecipes = 0;
@@ -225,10 +222,10 @@ export async function runCrawler() {
 
         for (const link of validLinks) {
           await delay(2000); // Ethical crawling delay
-          const recipeData = await crawlRecipe(link, config.selectors);
+          const recipeData = await crawlRecipe(link, selectors);
 
           if (recipeData) {
-            // Check if recipe already exists
+            // Check if recipe already exists using multiple criteria
             const [existingRecipe] = await db
               .select()
               .from(recipes)
@@ -246,6 +243,7 @@ export async function runCrawler() {
               continue;
             }
 
+            // Insert new recipe
             await db.insert(recipes).values({
               ...recipeData,
               cookwareType: "skillet", // Default value
@@ -264,6 +262,7 @@ export async function runCrawler() {
         log(`- New recipes: ${newRecipes}`, "crawler");
         log(`- Duplicates skipped: ${duplicates}`, "crawler");
 
+        // Update last crawl timestamp
         await db
           .update(crawlerConfigs)
           .set({ lastCrawl: new Date() })
@@ -272,7 +271,6 @@ export async function runCrawler() {
         log(`Completed crawl for ${config.siteName}`, "crawler");
       } catch (error) {
         log(`Failed to crawl ${config.siteName}: ${error}`, "crawler");
-        // Continue with next config even if one fails
         continue;
       }
     }
@@ -331,7 +329,6 @@ export async function analyzeWebsite(url: string) {
       ],
     };
 
-    // Helper function to find first matching selector with content
     const findFirstMatch = (document: Document, selectors: string[]): string => {
       for (const selector of selectors) {
         try {
@@ -380,6 +377,7 @@ export async function analyzeWebsite(url: string) {
         siteName,
         siteUrl: url,
         selectors,
+        enabled: true
       },
       sampleData: {
         recipeLinks: links.length,
