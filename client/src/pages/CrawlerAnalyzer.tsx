@@ -262,7 +262,14 @@ export function CrawlerAnalyzer() {
       value = currentElement.textContent?.trim() || '';
     }
 
-    handleElementSelection(selector, value);
+    // Update selected elements state
+    setSelectedElements(prev => {
+      const filtered = prev.filter(el => el.type !== activeSelector);
+      return [...filtered, { selector, type: activeSelector, value }];
+    });
+
+    // Clear active selector after selection
+    setActiveSelector(null);
   };
 
   const saveConfigMutation = useMutation({
@@ -295,16 +302,6 @@ export function CrawlerAnalyzer() {
     },
   });
 
-  const handleElementSelection = (selector: string, value: string) => {
-    if (!activeSelector) return;
-
-    setSelectedElements(prev => {
-      // Remove any existing mapping for this type
-      const filtered = prev.filter(el => el.type !== activeSelector);
-      return [...filtered, { selector, type: activeSelector, value }];
-    });
-    setActiveSelector(null);
-  };
 
   const handleSaveConfig = () => {
     const selectors = selectedElements.reduce((acc, { type, selector }) => {
@@ -372,9 +369,14 @@ export function CrawlerAnalyzer() {
                       key={type}
                       variant={activeSelector === type ? "default" : "outline"}
                       onClick={() => setActiveSelector(type as SelectedElement["type"])}
-                      className="justify-start"
+                      className={`justify-start ${
+                        selectedElements.some(el => el.type === type) ? "border-green-500" : ""
+                      }`}
                     >
                       {type}
+                      {selectedElements.some(el => el.type === type) && (
+                        <span className="ml-2 text-green-500">✓</span>
+                      )}
                     </Button>
                   ))}
                 </div>
