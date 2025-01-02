@@ -61,14 +61,13 @@ export function CrawlerAnalyzer() {
                 <style>
                   * { outline: none !important; }
 
-                  *[data-recipe-element] {
-                    transition: all 0.2s ease-in-out;
+                  body.selecting * {
+                    cursor: crosshair !important;
                   }
 
                   body.selecting *[data-recipe-element]:hover {
                     outline: 2px dashed #3b82f6 !important;
-                    cursor: crosshair !important;
-                    position: relative;
+                    background-color: rgba(59, 130, 246, 0.1) !important;
                   }
 
                   *[data-selected="true"] {
@@ -90,17 +89,47 @@ export function CrawlerAnalyzer() {
                     z-index: 1000;
                   }
                 </style>
+                <script>
+                  window.onload = function() {
+                    // Add data-recipe-element to all elements
+                    document.querySelectorAll('*').forEach((el, index) => {
+                      el.setAttribute('data-recipe-element', \`element-\${index}\`);
+                    });
+
+                    // Log initialization
+                    console.log('Recipe elements initialized');
+                  }
+                </script>
               </head>
               <body>
                 ${data.html}
                 <script>
-                  document.addEventListener('click', (e) => {
+                  // Prevent default actions
+                  document.addEventListener('click', function(e) {
                     e.preventDefault();
-                  });
+                    e.stopPropagation();
 
-                  window.addEventListener('message', (event) => {
+                    // Send click event to parent
+                    if (window.parent) {
+                      const target = e.target;
+                      window.parent.postMessage({
+                        type: 'elementClicked',
+                        elementId: target.getAttribute('data-recipe-element'),
+                        tagName: target.tagName,
+                        className: target.className,
+                        id: target.id,
+                        textContent: target.textContent,
+                        src: target.getAttribute('src'),
+                        innerHTML: target.innerHTML
+                      }, '*');
+                    }
+                  }, true);
+
+                  // Handle selection mode
+                  window.addEventListener('message', function(event) {
                     if (event.data.type === 'setActiveSelector') {
                       document.body.classList.toggle('selecting', event.data.selector !== null);
+                      console.log('Selection mode:', event.data.selector);
                     }
                   });
                 </script>
@@ -108,8 +137,6 @@ export function CrawlerAnalyzer() {
             </html>
           `);
           iframeDoc.close();
-
-          iframeDoc.addEventListener('click', handleElementClick);
         }
       }
       toast({ title: "Page loaded successfully" });
@@ -123,72 +150,108 @@ export function CrawlerAnalyzer() {
     },
   });
 
-  const handleElementClick = (e: MouseEvent) => {
-    e.preventDefault();
+  // Handle messages from iframe
+  useEffect(() => {
+    const handleMessage = (event: MessageEvent) => {
+      if (event.data.type === 'elementClicked' && activeSelector) {
+        const {
+          elementId,
+          tagName,
+          className,
+          id,
+          textContent,
+          src,
+          innerHTML
+        } = event.data;
 
-    if (!activeSelector || !iframeRef.current?.contentWindow?.document) {
-      return;
-    }
+        // Generate selector
+        let selector = '';
+        if (id) {
+          selector = `#${id}`;
+        } else if (className) {
+          const classes = className.split(' ').filter(Boolean).join('.');
+          selector = classes ? `.${classes}` : tagName.toLowerCase();
+        } else {
+          selector = tagName.toLowerCase();
+        }
 
-    const target = e.target as HTMLElement;
-    if (!target) return;
+        // Extract value based on element type and active selector
+        let value = '';
+        const element = iframeRef.current?.contentWindow?.document.querySelector(`[data-recipe-element="${elementId}"]`);
 
-    const iframeDoc = iframeRef.current.contentWindow.document;
+        if (!element) {
+          console.error('Element not found:', elementId);
+          return;
+        }
 
-    // Generate selector for the clicked element
-    let selector = '';
-    if (target.id) {
-      selector = `#${target.id}`;
-    } else if (target.className) {
-      const classes = Array.from(target.classList).join('.');
-      selector = classes ? `.${classes}` : target.tagName.toLowerCase();
-    } else {
-      selector = target.tagName.toLowerCase();
-    }
+        if (tagName.toLowerCase() === 'img' || activeSelector === 'image') {
+          value = src || '';
+        } else if (activeSelector === 'ingredients' || activeSelector === 'instructions') {
+          const listItems = element.querySelectorAll('li');
+          if (listItems.length > 0) {
+            value = Array.from(listItems)
+              .map(item => item.textContent?.trim())
+              .filter(Boolean)
+              .join('\n');
+          } else {
+            value = textContent?.trim() || '';
+          }
+        } else if (activeSelector === 'prepTime' || activeSelector === 'cookTime') {
+          const timeText = textContent?.trim() || '';
+          const timeMatch = timeText.match(/\d+\s*(?:minute|min|hour|hr|h|m)s?/i);
+          value = timeMatch ? timeMatch[0] : timeText;
+        } else {
+          value = textContent?.trim() || '';
+        }
 
-    // Extract value based on the type
-    let value = '';
-    if (target.tagName.toLowerCase() === 'img') {
-      value = target.getAttribute('src') || '';
-    } else if (activeSelector === 'ingredients' || activeSelector === 'instructions') {
-      const listItems = target.querySelectorAll('li');
-      if (listItems.length > 0) {
-        value = Array.from(listItems)
-          .map(item => item.textContent?.trim())
-          .filter(Boolean)
-          .join('\n');
-      } else {
-        value = target.textContent?.trim() || '';
+        // Update selected elements
+        setSelectedElements(prev => {
+          const filtered = prev.filter(el => el.type !== activeSelector);
+          return [...filtered, { selector, type: activeSelector, value }];
+        });
+
+        // Update visual selection in iframe
+        if (element) {
+          // Clear previous selection
+          const previousSelected = iframeRef.current?.contentWindow?.document.querySelector(
+            `[data-selected="true"][data-selector-type="${activeSelector}"]`
+          );
+          if (previousSelected) {
+            previousSelected.removeAttribute('data-selected');
+            previousSelected.removeAttribute('data-selector-type');
+          }
+
+          // Mark new selection
+          element.setAttribute('data-selected', 'true');
+          element.setAttribute('data-selector-type', activeSelector);
+
+          // Show success toast
+          toast({
+            title: `Selected ${activeSelector}`,
+            description: `Value: ${value.substring(0, 50)}${value.length > 50 ? '...' : ''}`
+          });
+        }
+
+        // Clear active selector
+        setActiveSelector(null);
       }
-    } else {
-      value = target.textContent?.trim() || '';
+    };
+
+    window.addEventListener('message', handleMessage);
+    return () => window.removeEventListener('message', handleMessage);
+  }, [activeSelector, toast]);
+
+  // Update iframe when activeSelector changes
+  useEffect(() => {
+    if (iframeRef.current?.contentWindow) {
+      iframeRef.current.contentWindow.postMessage({
+        type: 'setActiveSelector',
+        selector: activeSelector
+      }, '*');
+
+      console.log('Active selector updated:', activeSelector);
     }
-
-    // Update selections
-    setSelectedElements(prev => {
-      const filtered = prev.filter(el => el.type !== activeSelector);
-      return [...filtered, { selector, type: activeSelector, value }];
-    });
-
-    // Mark element as selected
-    const previousSelected = iframeDoc.querySelector(`[data-selected="true"][data-selector-type="${activeSelector}"]`);
-    if (previousSelected) {
-      previousSelected.removeAttribute('data-selected');
-      previousSelected.removeAttribute('data-selector-type');
-    }
-
-    target.setAttribute('data-selected', 'true');
-    target.setAttribute('data-selector-type', activeSelector);
-
-    // Clear active selector
-    setActiveSelector(null);
-
-    // Show success message
-    toast({
-      title: `Selected ${activeSelector}`,
-      description: `Value: ${value.substring(0, 50)}${value.length > 50 ? '...' : ''}`,
-    });
-  };
+  }, [activeSelector]);
 
   const saveConfigMutation = useMutation({
     mutationFn: async (config: { url: string; selectors: Record<string, string> }) => {
@@ -227,15 +290,6 @@ export function CrawlerAnalyzer() {
 
     saveConfigMutation.mutate({ url, selectors });
   };
-
-  useEffect(() => {
-    if (iframeRef.current?.contentWindow) {
-      iframeRef.current.contentWindow.postMessage({
-        type: 'setActiveSelector',
-        selector: activeSelector
-      }, '*');
-    }
-  }, [activeSelector]);
 
   return (
     <div className="container py-8">
@@ -326,9 +380,9 @@ export function CrawlerAnalyzer() {
 
               <div className="border rounded-lg overflow-hidden">
                 <div 
-                  ref={previewRef} 
+                  ref={previewRef}
                   className="w-full h-[600px]"
-                ></div>
+                />
               </div>
             </div>
           </div>
